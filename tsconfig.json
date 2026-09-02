@@ -5,6 +5,7 @@
     { "path": "./packages/db" },
     { "path": "./packages/connectors" },
     { "path": "./packages/engine" },
-    { "path": "./packages/agents" }
+    { "path": "./packages/agents" },
+    { "path": "./packages/attribution" }
   ]
 }

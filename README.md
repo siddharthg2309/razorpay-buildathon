@@ -81,6 +81,10 @@ npm test
 | A mix shift that leaves every segment healthy does not fire | `tests/incident.test.ts` |
 | Parked cases fire nothing, even after the clock advances past their due time | `tests/incident.test.ts` |
 | A rate drop mid-ramp re-parks rather than pressing on | `tests/incident.test.ts` |
+| Holdout assignment is deterministic and order-independent | `tests/attribution.test.ts` |
+| `holdout_flag` cannot be changed once assigned (DB trigger) | `tests/attribution.test.ts` |
+| Natural recovery is excluded from **both** arms, so lift is not inflated | `tests/attribution.test.ts` |
+| The estimate's interval brackets simulator ground truth | `tests/attribution.test.ts` |
 | No `now()` / `CURRENT_TIMESTAMP` / `Date.now()` outside `Clock` | `npm run lint:clock` |
 
 ## Status
@@ -95,7 +99,8 @@ npm test
 | 5 — Verifier + reconciler | done |
 | 6 — Agent runtime + provider adapter | done |
 | 7 — Incident mode | done |
-| 8 — Attribution + batch runner | next |
-| 9–11 | pending |
+| 8 — Attribution estimator | done |
+| 9 — Simulator + batch runner | next |
+| 10–11 | pending |
 
-173 tests.
+189 tests.
