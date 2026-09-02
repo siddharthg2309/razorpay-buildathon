@@ -1,0 +1,194 @@
+# The action library.
+#
+# This file is the closed set of things the system can decide to do. The
+# optimizer ranks entries from here and nothing else; the policy engine mints a
+# capability token only for an id that appears here; the connector refuses any
+# action_id it cannot bind to a supported capability.
+#
+# Two kinds of entry:
+#   kind: capability  -> binds to a PSPAdapter method, needs a capability token,
+#                        produces an action_attempts row with an idem_key.
+#   kind: schedule    -> binds to a scheduled_actions row. No external call, so
+#                        no token and no idempotency key. A "wait" is not a
+#                        capability; conflating the two puts an untokened row in
+#                        the executor's path.
+#
+# p_recover priors are authored here, by hand, from published card/UPI recovery
+# behaviour — deliberately NOT derived from the simulator's outcome model. If
+# they were, the optimizer would be scoring against the answer key and every
+# recovery number downstream would be circular. The batch reports optimizer
+# regret against simulator ground truth so the gap stays visible.
+
+version: 1
+
+defaults:
+  requires_approval: false
+  surface: simulated          # overridden per action; `live` only where the
+                              # RazorpayTestAdapter genuinely supports it
+
+actions:
+
+  # ---------------------------------------------------------------- capability
+
+  - id: create_payment_link
+    kind: capability
+    capability: createPaymentLink
+    surface: live
+    description: Hosted Razorpay payment link for the outstanding amount.
+    rails: [card, upi_collect, upi_autopay, enach, netbanking, wallet]
+    params:
+      amount: { type: integer, unit: paise, required: true }
+      currency: { type: string, enum: [INR], required: true }
+      expiry_hours: { type: integer, default: 72 }
+    amount_capped: true         # token carries amount_cap; connector checks it
+    action_cost_paise: 0
+    p_recover:
+      default: 0.22
+      by_cause:
+        insufficient_funds: 0.28
+        expired_card: 0.31
+        mandate_revoked: 0.24
+        issuer_decline: 0.19
+        gateway_timeout: 0.34
+    stop_conditions: [paid, opted_out, disputed, attempt_ceiling]
+
+  - id: request_payment_method_update
+    kind: capability
+    capability: requestPaymentMethodUpdate
+    surface: simulated
+    description: Hosted update path so the customer replaces the instrument. The
+                 agent never sees card data; this is the PCI-scope escape hatch.
+    rails: [card, upi_autopay, enach]
+    params:
+      reason_code: { type: string, required: true }
+      channel: { type: string, enum: [email, sms, whatsapp], required: true }
+    action_cost_paise: 35
+    p_recover:
+      default: 0.26
+      by_cause:
+        expired_card: 0.44
+        mandate_revoked: 0.38
+        mandate_cap_breach: 0.41
+    stop_conditions: [paid, opted_out, method_updated, attempt_ceiling]
+
+  - id: resume_checkout
+    kind: capability
+    capability: resumeCheckout
+    surface: simulated
+    description: Return-to-checkout path from a first-party abandonment fixture.
+                 Not a PSP event — the funnel event is ours.
+    rails: [card, upi_collect, netbanking, wallet]
+    params:
+      session_ref: { type: string, required: true }
+      preserve_cart: { type: boolean, default: true }
+    action_cost_paise: 0
+    p_recover:
+      default: 0.18
+      by_cause:
+        checkout_abandoned: 0.21
+    stop_conditions: [paid, opted_out, session_expired]
+
+  - id: send_approved_template
+    kind: capability
+    capability: sendApprovedTemplate
+    surface: simulated
+    description: DLT/WhatsApp approved template. The communication role fills
+                 declared slots only — it cannot author copy, add a link, or
+                 change the recipient.
+    rails: [card, upi_collect, upi_autopay, enach, netbanking, wallet]
+    params:
+      template_id: { type: string, required: true }
+      language: { type: string, enum: [en, hi, hinglish], required: true }
+      slots: { type: object, required: true }
+      channel: { type: string, enum: [sms, whatsapp, email], required: true }
+    consumes_contact_budget: true
+    quiet_hours_enforced: true
+    action_cost_paise: 25
+    p_recover:
+      default: 0.11
+      by_cause:
+        insufficient_funds: 0.17
+        mandate_cap_breach: 0.14
+    stop_conditions: [paid, opted_out, contact_budget_exhausted, attempt_ceiling]
+
+  - id: create_ops_escalation
+    kind: capability
+    capability: createOpsEscalation
+    surface: simulated
+    description: Hand the case to a human queue with an SLA. Terminal for the
+                 agent; never auto-executes on expiry.
+    rails: [card, upi_collect, upi_autopay, enach, netbanking, wallet, smart_collect]
+    params:
+      queue: { type: string, required: true }
+      sla_hours: { type: integer, default: 24 }
+      summary_ref: { type: string, required: true }
+    requires_approval: false
+    action_cost_paise: 900      # a human minute is the expensive action
+    p_recover:
+      default: 0.30
+    stop_conditions: [paid, human_closed, sla_expired]
+
+  - id: fetch_payment_status
+    kind: capability
+    capability: fetchPaymentStatus
+    surface: live
+    description: Reconciliation probe by idempotency key. Used by the boot-time
+                 in_flight reconciler, not proposed by the optimizer.
+    rails: [card, upi_collect, upi_autopay, enach, netbanking, wallet]
+    params:
+      idem_key: { type: string, required: true }
+    optimizer_selectable: false
+    action_cost_paise: 0
+    stop_conditions: []
+
+  # ------------------------------------------------------------------ schedule
+
+  - id: wait
+    kind: schedule
+    description: Park the plan until a virtual instant. No connector call, no
+                 token, no idem_key — this writes one scheduled_actions row.
+    params:
+      delay_hours: { type: integer, required: true }
+      reason: { type: string, required: true }
+    action_cost_paise: 0
+
+  - id: await_provider_retry
+    kind: schedule
+    description: The provider owns this retry (subscription/mandate cycles). We
+                 schedule an observation, not an attempt. This is the entry that
+                 exists because `charge_retry` deliberately does not.
+    params:
+      expected_at_hours: { type: integer, required: true }
+    rails: [upi_autopay, enach, card]
+    action_cost_paise: 0
+
+  - id: await_mandate_prerequisite
+    kind: schedule
+    description: Block until mandate/AFA/pre-debit state is verified. RBI
+                 e-mandate ordering is a hard prerequisite, and the provider owns
+                 the notification — we verify, we do not replace it.
+    params:
+      prerequisite: { type: string, enum: [mandate_active, pre_debit_notified, afa_complete], required: true }
+    rails: [upi_autopay, enach]
+    action_cost_paise: 0
+
+# ------------------------------------------------------------------- forbidden
+#
+# Present so that a proposal naming one fails loudly at load time with a reason,
+# rather than failing obscurely at the connector.
+
+forbidden:
+  - id: charge_retry
+    reason: >
+      No generic one-time charge retry. On mandate rails the provider owns the
+      retry cycle; use await_provider_retry. On cards, network rules cap retries
+      and penalise excess, and we hold no instrument to charge.
+  - id: update_routing
+    reason: >
+      Routing overrides have blast radius beyond one case and no verified live
+      capability. Incident mode may propose a simulated canary for approval; it
+      never executes a routing change.
+  - id: send_message
+    reason: >
+      No free-form messaging. DLT/TRAI and WhatsApp Business both require an
+      approved template; use send_approved_template.

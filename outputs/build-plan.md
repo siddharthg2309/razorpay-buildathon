@@ -11,7 +11,7 @@
 
 2. **We are not integrating with live production anything.** Real declines do not arrive on demand, a 14-day dunning sequence does not fit in a demo slot, and there is no live merchant traffic to detect an incident in. The simulator is therefore a **first-class deliverable**, while one narrow Razorpay Test Mode flow proves that the connector and webhook boundary are real.
 
-The honest framing on stage, said plainly and early: *"The engine is real. The payment world it acts on is simulated, with one live Razorpay test-mode case to show the connector is real. Because the world is simulated, we know the ground truth — which means we can show you that our attribution estimate is accurate to within a few percent. You can't do that with production data."*
+The honest framing on stage, said plainly and early: *"The engine is real. The payment world it acts on is simulated, with one live Razorpay test-mode case to show the connector is real. Because the world is simulated, we know the ground truth — which means we can show you that our estimate's confidence interval actually contains the true value. You can't do that with production data."*
 
 That turns the biggest apparent weakness into the strongest claim in the room.
 
@@ -59,7 +59,9 @@ Hours assume a small team working in parallel. **P1 = must exist for the demo. P
 - **`Clock` interface** implemented on day one — `RealClock` and `VirtualClock`. Every single component takes a clock. Retrofitting this later is the most expensive mistake available.
 - Shared types: `Case`, `CaseEvent`, `CaseRevision`, `Evidence`, `Claim`, `AgentRun`, `Action`, `Plan`, `LedgerEntry`.
 - Deterministic event reducer: `(previousRevision, CaseEvent) → CaseRevision`; it is the sole writer of case state.
-- Append-only `case_events` and `ledger` writers. The event log is the replay input; the ledger is the decision/side-effect audit.
+- Append-only `case_events` and `ledger` writers. The event log is the replay input; the ledger is the decision/side-effect audit. `seq` is allocated inside the case-row lock.
+- **`/actions/library.yaml` frozen before any other phase starts.** Every downstream phase compiles against these action IDs: playbooks (Phase 2), per-rail permissions (Phase 3), and the optimizer's candidate set (Phase 6).
+- Lint rule in CI: no `now()` or `CURRENT_TIMESTAMP` in migrations or queries. Every time value comes from the injected `Clock`, or the virtual clock silently stops governing that path.
 
 **Done when:** `pnpm test` runs, an event reduces to a reproducible case revision, the ledger can be written and read back, and the virtual clock can be advanced.
 
@@ -79,7 +81,7 @@ Hours assume a small team working in parallel. **P1 = must exist for the demo. P
 - **Decline taxonomy for India rails** — cards, UPI AutoPay, e-NACH, netbanking, wallets. Hard vs soft, retry eligibility, per-code ceiling.
 - Deterministic classifier: `(rail, code, context) → cause, confidence, rule_id`.
 - Playbook table: `(domain, cause) → default plan`.
-- Work router: `(event type, changed facts, case state) → required specialist roles`; it invalidates stale claims instead of rerunning every agent.
+- Role registry with `dependsOn: EvidenceKind[]` per role. The work router derives the rerun set from it — `(changed evidence kinds, case state) → roles to rerun` — and invalidates only the claims whose declared dependencies moved, instead of rerunning every agent.
 
 **Done when:** a simulated `payment_failed` with `INSUFFICIENT_FUNDS` on UPI AutoPay produces a cause, confidence, rule ID, and plan—with zero model calls—and an inbound reply invalidates only context/communication claims.
 
@@ -99,6 +101,7 @@ Hours assume a small team working in parallel. **P1 = must exist for the demo. P
 - **`RazorpayTestAdapter`** — signed webhooks plus only the supported Payment Link or test Subscription flows used in the live proof. No generic one-time `chargeRetry` or unverified routing override.
 - Idempotent executor: write `action_attempts` row **before** the call, reconcile `in_flight` rows on boot.
 - Connector admission check rejecting any call without a valid unburned token.
+- Executor acquires the obligation lease at **admission**, not at fan-out, revalidates the plan against the current case revision, then presents the token.
 
 **Done when:** the engine executes any adapter-supported plan without adapter-specific business logic, rejects an unsupported capability before execution, and a killed process mid-call reconciles rather than double-charging.
 
@@ -229,7 +232,7 @@ No team using production data can show that line. It says: our measurement metho
 seed: 20260902
 merchant: acme-subscriptions
 cohort:
-  size: 400
+  size: 2000
   domains:
     subscription_renewal: 0.55
     payment_failure: 0.30
@@ -272,7 +275,7 @@ Run a single case against `RazorpayTestAdapter` live: create a real test-mode pa
 
 ### 3g. Synthetic scenario gallery
 
-The batch must include different recovery paths, not 400 cosmetic copies of one decline. Each scenario has a hidden outcome model, visible evidence, an allowed action set and an expected terminal state.
+The batch must include different recovery paths, not 2000 cosmetic copies of one decline. Each scenario has a hidden outcome model, visible evidence, an allowed action set and an expected terminal state.
 
 | Scenario | Trigger and visible evidence | Recovery path | What it proves |
 |---|---|---|---|
@@ -319,7 +322,7 @@ The brief you gave: **clean, classic, monospace, boxed.** That reads as an instr
 }
 ```
 
-**Rules:** IBM Plex Mono or JetBrains Mono throughout. 1px solid borders, no shadows, no gradients, no rounded corners beyond 2px. Numbers tabular-aligned. One accent colour only — it marks the thing you want looked at, and nothing else. State colours are used only on state.
+**Rules:** every executed row — in the case inspector and in the terminal stream — carries a `SIM` or `LIVE` badge. Screen 2 exists to prove the honesty claim, and it currently shows `retry_within_cap`, which `RazorpayTestAdapter` deliberately cannot perform; unlabelled, that screen contradicts the boundary it is meant to demonstrate. IBM Plex Mono or JetBrains Mono throughout. 1px solid borders, no shadows, no gradients, no rounded corners beyond 2px. Numbers tabular-aligned. One accent colour only — it marks the thing you want looked at, and nothing else. State colours are used only on state.
 
 This also happens to echo the dark/brass palette of the Track 03 card itself, which reads as deliberate.
 
@@ -423,10 +426,10 @@ Colour-coded, monospace, scrolling. Cheap to build, and it makes the system feel
 |---|---|---|
 | 0:00–0:30 | **Frame the problem and the honesty.** "Revenue leaks in stages. We built the loop that closes it. The engine is real; the payment world is simulated — which means we know the ground truth and can prove our measurement is accurate. Here's a live Razorpay test-mode case first, so you know the connector is real." | Terminal, idle |
 | 0:30–1:00 | **The one real case.** Trigger it. Real payment link, real payment ID, real webhook closes the case. | Case inspector, live |
-| 1:00–2:00 | **Launch the batch.** 400 cases, 20% holdout, virtual clock running. Let the terminal scroll. Point at one Tier 0 resolve, one Tier 1 fan-out/reducer decision, and one policy BLOCK on quiet hours. | Terminal |
+| 1:00–2:00 | **Launch the batch.** 2000 cases, 20% holdout, virtual clock running. Let the terminal scroll. Point at one Tier 0 resolve, one Tier 1 fan-out/reducer decision, and one policy BLOCK on quiet hours. | Terminal |
 | 2:00–2:45 | **Inject the incident.** Gateway A + HDFC degrades. One incident opens, 47 cases park rather than each retrying and messaging. Show the RCA box. Resolve it; staged release ramps 5→15→40→100 without re-triggering. | Incident screen |
 | 2:45–3:30 | **Open one case fully.** The Screen 2 trail. Say nothing for ten seconds and let them read it. Then point at three lines: the policy rule + version, the capability token, and the verified mandate/pre-debit prerequisite. | Case inspector |
-| 3:30–4:30 | **The number.** Gross versus estimated incremental recovery, its confidence interval, and simulator ground truth. "The honest agent number is ₹2.09 lakh, with this range; the simulator lets us validate the estimator." Then cost per rupee recovered. | Batch run screen |
+| 3:30–4:30 | **The number.** Gross versus estimated incremental recovery, its confidence interval, and simulator ground truth. "The honest agent number is ₹2.09 lakh, and this is its interval; the simulator lets us check that the interval contains the truth." Then cost per rupee recovered. | Batch run screen |
 | 4:30–5:00 | **Close on the bar.** Stopping rules fired N times, escalations M, every action carries a rule ID and a version, replay reproduces every deterministic decision. Offer to re-run with the same seed. | Policy screen |
 
 **Have ready but off-script:** the adapter interface file, the policy YAML and the agent-runtime ablation comparison (if anyone challenges the simulation or the use of AI).
@@ -443,6 +446,7 @@ Colour-coded, monospace, scrolling. Cheap to build, and it makes the system feel
 | Live adapter promises an unsupported payment action | Restrict RazorpayTestAdapter to a preflighted Payment Link or test Subscription flow; label all other actions simulated |
 | Incident detector fires forty incidents | Child-segment suppression + dwell, tested against the scenario before demo day |
 | Attribution number looks too good | That's the ground-truth line's job — show the error, not just the estimate |
+| Optimizer scores against the simulator's own answer key | Author `p_recover` priors in `/actions/library.yaml` independently of the simulator's outcome model, and deliberately imperfectly; report optimizer regret against ground truth so the gap is visible |
 | Scope creep back to four domains deep | Checkout and invoice ship as playbook config on the same engine, not new code paths |
 
 ---
@@ -451,7 +455,7 @@ Colour-coded, monospace, scrolling. Cheap to build, and it makes the system feel
 
 The build is done when all of these are true:
 
-1. `pnpm batch scenarios/demo.yaml` runs 400 cases to terminal states under the virtual clock and prints gross, estimated incremental recovery, 95% interval, simulator ground truth and error.
+1. `pnpm batch scenarios/demo.yaml` runs 2000 cases to terminal states under the virtual clock and prints gross, estimated incremental recovery, 95% interval, simulator ground truth and error.
 2. Re-running with the same seed reproduces the output.
 3. Replaying the ledger reproduces every Tier 0 decision.
 4. One preflighted, supported case executes end to end against Razorpay Test Mode with a real payment ID and verified webhook.

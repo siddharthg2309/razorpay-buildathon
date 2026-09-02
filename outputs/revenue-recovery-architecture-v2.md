@@ -203,6 +203,22 @@ flowchart TB
     VERIFY --> DASH["Operations dashboard<br/>case drilldown and batch recovery"]
 ```
 
+Each role declares the evidence kinds it consumes:
+
+```ts
+interface RoleContract {
+  role: RoleId
+  dependsOn: EvidenceKind[]      // drives claim invalidation
+  toolScope: ToolId[]
+  claimSchema: JSONSchema
+  timeoutMs: number
+  callBudget: number
+  cacheKey: (input: RoleInput) => string
+}
+```
+
+The work router derives the rerun set from `dependsOn`: when a new revision changes evidence of kind `K`, every claim whose role declares `K` is invalidated and only those roles rerun. Invalidation is therefore derived from the registry rather than hand-maintained, and the surviving claims are reused as-is. This is what makes the Phase 2 acceptance criterion — an inbound reply invalidates context and communication but not diagnosis, incident or economics — a property of the registry rather than a special case in the router.
+
 There are two different reducers:
 
 1. **Event reducer (deterministic):** reduces the ordered event log into the current `CaseState`. It makes replay and selective re-evaluation possible.
@@ -358,6 +374,8 @@ Not the case, not the customer. One obligation = one thing owed: a subscription 
 
 ### Obligation lease
 
+The lease is acquired at **execution admission**, not at deliberation fan-out. Specialists are read-only over a blackboard snapshot, so they need no lease; taking one before a provider call would let a slow role hold the obligation, and a lease expiring mid-call would let a second worker act on the same obligation. The executor acquires the lease, revalidates that the plan still matches the current case revision, and only then presents the capability token.
+
 Any actor must hold `obligation_lock(obligation_id, holder, expiry)` to execute. Fixes the v1 §4 race directly: `payment_failed` opens a case, the 20-minute abandonment timer fires and would open a second — but the dedup key is the **order/session**, not the customer, and the second case attaches to the first rather than opening.
 
 ### Idempotency key
@@ -458,10 +476,11 @@ The bar says **measured** money recovered. This is the component that produces t
 - **Estimator**:
   `incremental = (recovery_rate_treated − recovery_rate_holdout) × treated_volume × mean_value_at_risk`
 - **Window**: fixed per domain — 14 days for dunning, 48h for checkout, 30 days for invoices.
-- **Exclusions**: payments recovered by the merchant's own existing dunning, and self-service customer retries occurring before first agent contact.
+- **Exclusions, applied symmetrically to both arms**: payments recovered by the merchant's own existing dunning, and any recovery landing inside a fixed `natural_recovery_window` (default 30 virtual minutes) measured from case creation. The window is wall-clock, not contact-relative — a contact-relative rule would subtract self-service retries from the treated arm only, leave them in the holdout numerator, and bias the estimate upward. Exclusion counts are reported per arm.
 - **Normalisation**: a recovered renewal counts once as cash collected. It is *not* also counted as retained MRR in the headline; MRR is a breakdown, not an addend.
 - **Uncertainty**: show a 95% confidence interval for recovery-rate lift and a bootstrap interval for incremental recovered rupees.
-- **Agent-runtime ablation**: run the same seeded scenario with parallel specialist claims enabled and with the Tier 0 fallback to measure the incremental contribution of deliberation. Separately report provider spend and model-call rate.
+- **Powering the holdout**: the interval is driven by the *holdout* arm, which is the small one. At 400 cases / 20% the holdout is n=80 and the 95% interval on the lift is roughly ±10pp — about ±40% on the rupee figure, which is too wide to claim precision. Batch size is nearly free under the virtual clock, so the demo batch runs at **2000 cases** (holdout n=400), which brings the interval to roughly ±18%. Never describe the estimate as "accurate to a few percent"; the honest claim is that the interval contains the simulator's true value.
+- **Agent-runtime ablation**: run the same seeded scenario with parallel specialist claims enabled, against a control arm that uses a **generic per-rail default playbook** for every case the ladder would have escalated. The control must not inherit the degraded-mode rule (§4), which stops safe when no playbook matches — that rule is a safety property, and letting it govern the control would credit deliberation with cases the control was forbidden from attempting. Separately report provider spend and model-call rate.
 - **Reporting**: show gross and incremental side by side, clearly labelled. Simulator ground truth is validation-only and is never presented as production-observable.
 
 Metrics beyond the headline: recovery rate by cause / rail / issuer, approval-rate delta after an incident action, time to recovery, cost per rupee recovered (including model spend), contact volume per recovered rupee.
@@ -548,7 +567,7 @@ attribution_runs(id, batch_id, treated_n, holdout_n, treated_rate,
                  holdout_rate, incremental_amount, window_days)
 ```
 
-`case_events` is the authoritative ordered input; `case_revisions` is the output of the deterministic event reducer. `ledger` records every decision and side effect. Replaying the event log must reproduce every Tier 0 decision exactly and reproduce the inputs, claims, and scores used for each Tier 1 decision.
+`case_events.seq` is allocated inside the case-row lock (`SELECT ... FROM cases WHERE id = :case_id FOR UPDATE`), so concurrent events for one case serialise rather than colliding on `UNIQUE(case_id, seq)`. `case_events` is the authoritative ordered input; `case_revisions` is the output of the deterministic event reducer. `ledger` records every decision and side effect. Replaying the event log must reproduce every Tier 0 decision exactly and reproduce the inputs, claims, and scores used for each Tier 1 decision.
 
 ---
 
