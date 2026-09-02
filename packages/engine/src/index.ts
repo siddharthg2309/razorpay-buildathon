@@ -9,3 +9,6 @@ export * from "./token-burn.js";
 export * from "./executor.js";
 export * from "./reconciler.js";
 export * from "./verifier.js";
+export * from "./detector.js";
+export * from "./incident.js";
+export * from "./release-controller.js";

@@ -77,6 +77,10 @@ npm test
 | The reducer spends a provider call only on a material conflict | `tests/agents.test.ts` |
 | A provider outage escalates rather than inventing a plan | `tests/agents.test.ts` |
 | The optimizer cannot select an action outside the library | `tests/agents.test.ts` |
+| A gateway outage opens one incident, not one per child segment | `tests/incident.test.ts` |
+| A mix shift that leaves every segment healthy does not fire | `tests/incident.test.ts` |
+| Parked cases fire nothing, even after the clock advances past their due time | `tests/incident.test.ts` |
+| A rate drop mid-ramp re-parks rather than pressing on | `tests/incident.test.ts` |
 | No `now()` / `CURRENT_TIMESTAMP` / `Date.now()` outside `Clock` | `npm run lint:clock` |
 
 ## Status
@@ -90,7 +94,8 @@ npm test
 | 4 — Connectors + executor | done |
 | 5 — Verifier + reconciler | done |
 | 6 — Agent runtime + provider adapter | done |
-| 7 — Incident mode | next |
-| 8–11 | pending |
+| 7 — Incident mode | done |
+| 8 — Attribution + batch runner | next |
+| 9–11 | pending |
 
-151 tests.
+173 tests.
