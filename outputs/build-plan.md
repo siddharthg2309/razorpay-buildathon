@@ -9,7 +9,7 @@
 
 1. **The bar is "measured money recovered across a batch."** So the build is not done when one case works end to end. It is done when a batch of a few hundred cases runs, a holdout splits, and a number comes out with a denominator.
 
-2. **We are not integrating with live production anything.** Real declines don't arrive on demand, a 14-day dunning sequence doesn't fit in a demo slot, and there is no live merchant traffic to detect an incident in. So the simulation substrate is not a shortcut we apologise for — it is **a first-class deliverable engineered from Phase 0**, and it is what makes the batch number provable rather than asserted.
+2. **We are not integrating with live production anything.** Real declines do not arrive on demand, a 14-day dunning sequence does not fit in a demo slot, and there is no live merchant traffic to detect an incident in. The simulator is therefore a **first-class deliverable**, while one narrow Razorpay Test Mode flow proves that the connector and webhook boundary are real.
 
 The honest framing on stage, said plainly and early: *"The engine is real. The payment world it acts on is simulated, with one live Razorpay test-mode case to show the connector is real. Because the world is simulated, we know the ground truth — which means we can show you that our attribution estimate is accurate to within a few percent. You can't do that with production data."*
 
@@ -27,7 +27,7 @@ That turns the biggest apparent weakness into the strongest claim in the room.
 | DB | Postgres (`FOR UPDATE SKIP LOCKED` is the scheduler primitive; JSONB for evidence/ledger) |
 | Migrations | drizzle or plain SQL files — no ORM ceremony |
 | Queue | in-process worker loop over the `scheduled_actions` table; no external broker |
-| LLM | `@anthropic-ai/sdk` — Opus 5 / Sonnet 5 / Haiku 4.5 per the routing table |
+| LLM | `openai` Node SDK + Responses API — GPT-5.6 Sol / Terra / Luna, configured per call site |
 | Web console | Next.js + Tailwind, server components where possible |
 | Terminal view | plain Node + `chalk`, reading the same event stream over SSE |
 | Charts | hand-rolled SVG — no chart lib, the visuals here are simple and a library is a dependency risk |
@@ -90,13 +90,13 @@ Hours assume a small team working in parallel. **P1 = must exist for the demo. P
 
 ### Phase 4 — Connectors + executor (5h, P1)
 
-- `PSPAdapter` interface: `chargeRetry`, `createPaymentLink`, `sendMessage`, `updateRouting`, `fetchPaymentStatus`.
+- Capability-specific adapter interface: `createPaymentLink`, `resumeCheckout`, `requestPaymentMethodUpdate`, `fetchPaymentStatus`, `sendApprovedTemplate`, `createOpsEscalation`.
 - **`SimulatedPSP`** — see §3.
-- **`RazorpayTestAdapter`** — Orders, Payments, Payment Links, Subscriptions, Invoices, Webhooks. Signature verification on inbound.
+- **`RazorpayTestAdapter`** — signed webhooks plus only the supported Payment Link or test Subscription flows used in the live proof. No generic one-time `chargeRetry` or unverified routing override.
 - Idempotent executor: write `action_attempts` row **before** the call, reconcile `in_flight` rows on boot.
 - Connector admission check rejecting any call without a valid unburned token.
 
-**Done when:** the same plan executes against either adapter with no engine changes, and a killed process mid-call reconciles rather than double-charging.
+**Done when:** the engine executes any adapter-supported plan without adapter-specific business logic, rejects an unsupported capability before execution, and a killed process mid-call reconciles rather than double-charging.
 
 ### Phase 5 — Verifier + reconciler (3h, P1)
 
@@ -104,27 +104,28 @@ Hours assume a small team working in parallel. **P1 = must exist for the demo. P
 - Reconciler: match money received to the obligation. For B2B, Smart Collect virtual account matching.
 - Terminal-state writer that cancels pending scheduled actions atomically.
 
-**Done when:** a successful retry moves the case to `RECOVERED` and the remaining dunning steps vanish from the schedule.
+**Done when:** a verified collection or provider-confirmed retry moves the case to `RECOVERED` and the remaining scheduled actions vanish from the schedule.
 
-### Phase 6 — The LLM tier (6h, P1)
+### Phase 6 — The OpenAI reasoning tier (6h, P1)
 
-Implement the five call sites from architecture §4. For each:
+Implement the five call sites from architecture §4 through one provider-neutral `Reasoner` interface. For each:
 
-- Frozen system prompt with `cache_control` on the last stable block.
-- `output_config.format` JSON schema — the model returns structured data, never prose the engine has to parse.
+- `openai.responses.create()` with `text.format` JSON Schema — the model returns structured data, never prose the engine has to parse.
+- Stable instructions/action library first, dynamic redacted evidence last, and a stable `prompt_cache_key` per call site.
 - Bounded input assembled from evidence refs, PII-redacted.
 - Injection posture: reply interpreter returns enum + fields only, no tool access.
-- **Degraded-mode fallback** to the Tier 0 playbook.
+- Store response ID, model, schema version, latency, usage and validation result in the ledger.
+- **Degraded-mode fallback** only to an explicit, policy-allowed Tier 0 playbook; otherwise escalate or stop safely.
 
-**Done when:** an unmapped decline code routes to Tier 1, the synthesizer returns a schema-valid hypothesis citing evidence IDs, the planner returns action IDs from the library only, and `cache_read_input_tokens > 0` on the second case.
+**Done when:** an unmapped decline code routes to Tier 1, the synthesizer returns a schema-valid hypothesis citing evidence IDs, the planner returns action IDs from the library only, and OpenAI cached-token telemetry is visible on a repeated case.
 
-### Phase 7 — Incident mode (6h, P2)
+### Phase 7 — Incident mode (6h, P1 core + P2 hardening)
 
-- Rolling metric windows per segment; seasonal baseline store.
-- Detector per architecture §8a: volume floor, z-test, dwell, BH, child suppression, auto-close.
+- **P1:** ingest a Razorpay downtime signal or seeded approval-rate anomaly, open one incident, attach/suppress affected cases, and stage their release after recovery.
+- **P2:** seasonal per-segment baselines, volume floor, z-test, dwell, BH correction, child suppression and auto-close.
 - Incident graph, case attachment, `suppressed_by_incident`.
-- **Release controller**: ramp + jitter + circuit breaker.
-- Reroute action with canary, auto-rollback, TTL.
+- **Release controller**: ramp + jitter + circuit breaker in the simulator.
+- A routing change remains a simulated, approval-only proposal until a supported external capability is verified.
 
 **Done when:** injecting a gateway degradation opens exactly one incident (not forty), parks the affected cases, and staged release resumes them without re-triggering the detector.
 
@@ -133,14 +134,15 @@ Implement the five call sites from architecture §4. For each:
 ### Phase 8 — Attribution + batch runner (4h, P1)
 
 - Holdout assignment at case creation: stratified by cause and value band, written immutably.
-- Estimator per architecture §10, with per-domain measurement windows and exclusion rules.
+- Estimator per architecture §10, with per-domain measurement windows, exclusion rules, a 95% confidence interval and a bootstrap interval for incremental rupees.
+- LLM ablation runner: same seed with Tier 1 enabled versus Tier 0 fallback.
 - **Batch runner**: load a scenario, create N cases, run to completion under the virtual clock, emit the attribution report.
 
 **Done when:** `pnpm batch scenarios/demo.yaml` prints gross recovered, incremental recovered, holdout rate, treated rate, and cost per rupee.
 
 ### Phase 9 — Simulator + ground truth (5h, P1)
 
-See §3 in full. Deliverables: latent customer model, outcome model, scenario loader, event injector, seeded RNG, ground-truth reporter.
+See §3 in full. Deliverables: latent customer model, outcome model, scenario loader, checkout-event fixture, event injector, seeded RNG and ground-truth reporter.
 
 **Done when:** the same seed produces byte-identical batch output twice, and the ground-truth reporter prints the true incremental recovery next to the estimated one.
 
@@ -156,10 +158,11 @@ See §4. Web console (5 screens) + terminal stream view.
 - Ledger replay verifier: replay reproduces every Tier 0 decision.
 - The one live Razorpay test-mode case, pre-flighted.
 - Fallback recording of the full run in case the venue wifi dies.
+- Public-repo handoff: root README with architecture, one-command demo instructions, synthetic-versus-live boundary and Test Mode/webhook setup notes.
 
 ### Cut ladder
 
-If time runs out, cut in this order: Phase 7 reroute/canary → checkout + invoice playbooks → terminal view → Hinglish voice → incident mode entirely. **Never cut:** scheduler, capability tokens, attribution, batch runner, simulator. Those five are the demo.
+If time runs out, cut in this order: advanced incident statistics/reroute → extra checkout and invoice variants → terminal view. **Never cut:** scheduler, capability tokens, attribution, batch runner, simulator, or the basic incident-suppression path. Those are the demo.
 
 ---
 
@@ -171,9 +174,11 @@ Everything the engine does to the outside world goes through `PSPAdapter`. Two i
 
 ```ts
 interface PSPAdapter {
-  chargeRetry(req: RetryRequest, token: CapabilityToken): Promise<PaymentResult>
   createPaymentLink(req: LinkRequest, token: CapabilityToken): Promise<Link>
-  sendMessage(req: MessageRequest, token: CapabilityToken): Promise<Delivery>
+  resumeCheckout(req: CheckoutRequest, token: CapabilityToken): Promise<CheckoutSession>
+  requestPaymentMethodUpdate(req: UpdateRequest, token: CapabilityToken): Promise<RecoveryLink>
+  sendApprovedTemplate(req: MessageRequest, token: CapabilityToken): Promise<Delivery>
+  createOpsEscalation(req: EscalationRequest, token: CapabilityToken): Promise<Escalation>
   fetchPaymentStatus(idemKey: string): Promise<PaymentResult | null>
 }
 ```
@@ -217,7 +222,7 @@ No team using production data can show that line. It says: our measurement metho
 seed: 20260902
 merchant: acme-subscriptions
 cohort:
-  size: 300
+  size: 400
   domains:
     subscription_renewal: 0.55
     payment_failure: 0.30
@@ -237,7 +242,7 @@ cohort:
     issuer_decline: 0.10
     unmapped_code: 0.05        # ← forces Tier 1
   value_distribution: lognormal(mu=7.6, sigma=0.9)
-holdout: 0.10
+holdout: 0.20
 injections:
   - at: T+2h
     type: gateway_degradation
@@ -246,7 +251,7 @@ injections:
     duration: 40m
 ```
 
-The `unmapped_code` slice exists purely so Tier 1 fires during the demo and you can point at a case the model actually resolved.
+The `unmapped_code` slice exists purely so Tier 1 fires during the demo and you can point at a case the model actually resolved. The synthetic batch is not presented as live merchant traffic; its hidden ground truth validates the holdout estimator.
 
 ### 3e. Determinism and replay
 
@@ -256,7 +261,22 @@ The `unmapped_code` slice exists purely so Tier 1 fires during the demo and you 
 
 ### 3f. The one real thing
 
-Run a single case against `RazorpayTestAdapter` live: create a real test-mode payment link, show the real payment ID, let the real webhook come back and close the case. One case, thirty seconds. It converts "simulated" from a category to a scope: *the world is simulated, the connector is not.*
+Run a single case against `RazorpayTestAdapter` live: create a real test-mode payment link or test Subscription action, show the real payment ID, then let a verified webhook close the case. One case, thirty seconds. It converts "simulated" from a category to a scope: *the recovery engine is real, the batch payment world is simulated.*
+
+### 3g. Synthetic scenario gallery
+
+The batch must include different recovery paths, not 400 cosmetic copies of one decline. Each scenario has a hidden outcome model, visible evidence, an allowed action set and an expected terminal state.
+
+| Scenario | Trigger and visible evidence | Recovery path | What it proves |
+|---|---|---|---|
+| **Subscription: insufficient funds** | `subscription.pending`, active mandate, funds clear at T+2d | Observe provider retry; if policy allows, send an approved update/reminder template | Time-aware recovery, no blind charge retry |
+| **Subscription: mandate revoked** | Failed renewal, revoked mandate | Stop debit attempts; request payment-method update or escalate | A stopping rule protects the customer |
+| **Payment: gateway timeout** | `payment.failed`, timeout evidence, affected segment | Offer a supported Payment Link/alternate checkout in simulation; attach to an incident when relevant | Cause-aware intervention |
+| **Checkout abandonment** | Local checkout fixture records last stage, no completion after virtual inactivity | Preserve cart and create a return-to-checkout path | First-party funnel event, not a fake PSP webhook |
+| **B2B invoice: missing PO** | Invoice overdue; reply interpreter extracts `MISSING_PO` | Pause collection, request PO through approved template, then resume | Collections without aggressive automation |
+| **Ambiguous/unmapped failure** | Conflicting evidence or an unknown code | OpenAI diagnosis + planner proposes only known action IDs | Meaningful bounded AI reasoning |
+| **Gateway incident** | Seeded approval-rate fall or Razorpay downtime event across a segment | Open incident, suppress child actions, propose supported/simulated remediation, staged release | Event-driven plus incident-driven coordination |
+| **Policy block** | Quiet hours, contact budget exhausted, dispute, or opt-out | Block action and emit a rule-backed terminal/audit event | Bounded execution and auditability |
 
 ---
 
@@ -304,18 +324,18 @@ This also happens to echo the dark/brass palette of the Track 03 card itself, wh
 ┌─ RUN acme-subscriptions ─ seed 20260902 ─ T+14d ────── COMPLETE ─┐
 │                                                                  │
 │   ₹ 8,42,000        ₹ 2,08,900        ₹ 2,14,300         2.5%   │
-│   AT RISK           INCREMENTAL       TRUE (SIM)         ERROR   │
-│                     RECOVERED         GROUND TRUTH               │
+│   AT RISK           EST. INCREMENTAL  TRUE (SIM)         ERROR   │
+│                     95% CI: 1.65–2.53L GROUND TRUTH              │
 │                                                                  │
-│   gross recovered  ₹ 3,11,400   ·   treated 270   holdout 30    │
+│   gross recovered  ₹ 3,11,400   ·   treated 320   holdout 80    │
 │   treated rate       41.2%      ·   holdout rate      17.4%     │
 │   cost / ₹ recovered  ₹0.031    ·   model spend    ₹ 412        │
 ├──────────────────────────────────────────────────────────────────┤
 │  TIER      cases    resolved    │  TERMINAL STATE       cases     │
-│  ── T0       241        198     │  RECOVERED              117     │
-│  ── T1        48         39     │  UNRECOVERABLE           74     │
-│  ── T2        11          6     │  STOPPED (rule)          61     │
-│                                 │  DISPUTED / OPTED OUT    18     │
+│  ── T0       322        265     │  RECOVERED              165     │
+│  ── T1        62         51     │  UNRECOVERABLE          122     │
+│  ── T2        16          8     │  STOPPED (rule)          90     │
+│                                 │  DISPUTED / OPTED OUT    23     │
 ├──────────────────────────────────────────────────────────────────┤
 │  approval rate ▁▂▃▅▆▆▆▂▁▁▂▅▆▆▇▇   ← incident window shaded       │
 └──────────────────────────────────────────────────────────────────┘
@@ -334,10 +354,10 @@ The decision trail for one case, top to bottom, nothing hidden. This is the scre
 │ T+0h00  EVIDENCE      mandate cap ₹3,000 · attempt ₹4,200        │
 │                       mandate active · 2 prior successes         │
 │ T+0h01  DIAGNOSING    T0 no match → escalate                     │
-│                       ↳ T1 synthesizer  claude-sonnet-5          │
+│                       ↳ T1 synthesizer  gpt-5.6-terra            │
 │                         cause: mandate_cap_breach   conf 0.88    │
 │                         cites: ev_1102, ev_1104                  │
-│ T+0h01  PLANNING      T1 planner  claude-opus-5                  │
+│ T+0h01  PLANNING      T1 planner  gpt-5.6-sol                    │
 │                       1. notify_mandate_update  (link)           │
 │                       2. wait 48h                                │
 │                       3. retry_within_cap ₹3,000                 │
@@ -346,7 +366,7 @@ The decision trail for one case, top to bottom, nothing hidden. This is the scre
 │                       policy v7 · token tk_9d3 · cap ₹3,000      │
 │ T+0h01  EXECUTE       whatsapp template WA_MANDATE_UPD (hi)      │
 │                       budget 1/2 in 7d · quiet hours OK          │
-│ T+2h14  OBSERVE       inbound reply → interpreter (haiku-4-5)    │
+│ T+2h14  OBSERVE       inbound reply → interpreter (gpt-5.6-luna) │
 │                       intent: WILL_UPDATE   ← treated as data    │
 │ T+2d01  EXECUTE       pre-debit notification  (RBI, T-24h)       │
 │ T+3d01  EXECUTE       retry ₹3,000  idem 7c2f…  token tk_a41     │
@@ -376,7 +396,7 @@ A second surface, same SSE event stream, for the "watch it think" moment:
 ```
 14:02:11  c_8812  DETECT    upi_autopay MANDATE_AMOUNT_EXCEEDED  ₹4,200
 14:02:11  c_8812  TIER0     no match → escalate
-14:02:12  c_8812  TIER1     synth(sonnet-5) mandate_cap_breach 0.88
+14:02:12  c_8812  TIER1     synth(gpt-5.6-terra) mandate_cap_breach 0.88
 14:02:12  c_8812  POLICY    ALLOW R-114 · token tk_9d3 · cap ₹3,000
 14:02:12  c_8812  EXEC      whatsapp WA_MANDATE_UPD hi → +91••••4471
 14:02:13  c_9007  POLICY    BLOCK R-207 quiet_hours (22:41 IST)
@@ -394,13 +414,13 @@ Colour-coded, monospace, scrolling. Cheap to build, and it makes the system feel
 |---|---|---|
 | 0:00–0:30 | **Frame the problem and the honesty.** "Revenue leaks in stages. We built the loop that closes it. The engine is real; the payment world is simulated — which means we know the ground truth and can prove our measurement is accurate. Here's a live Razorpay test-mode case first, so you know the connector is real." | Terminal, idle |
 | 0:30–1:00 | **The one real case.** Trigger it. Real payment link, real payment ID, real webhook closes the case. | Case inspector, live |
-| 1:00–2:00 | **Launch the batch.** 300 cases, 10% holdout, virtual clock running. Let the terminal scroll. Point at one Tier 0 resolve, one Tier 1 escalation, and one policy BLOCK on quiet hours. | Terminal |
+| 1:00–2:00 | **Launch the batch.** 400 cases, 20% holdout, virtual clock running. Let the terminal scroll. Point at one Tier 0 resolve, one OpenAI Tier 1 escalation, and one policy BLOCK on quiet hours. | Terminal |
 | 2:00–2:45 | **Inject the incident.** Gateway A + HDFC degrades. One incident opens, 47 cases park rather than each retrying and messaging. Show the RCA box. Resolve it; staged release ramps 5→15→40→100 without re-triggering. | Incident screen |
-| 2:45–3:30 | **Open one case fully.** The Screen 2 trail. Say nothing for ten seconds and let them read it. Then point at three lines: the policy rule + version, the capability token, and the RBI pre-debit notification scheduled before the retry. | Case inspector |
-| 3:30–4:30 | **The number.** Gross vs incremental vs ground truth, with the error percentage. "Most demos would show you ₹3.1 lakh. The honest number is ₹2.09 lakh, and here's the proof our estimate is right." Then cost per rupee recovered. | Batch run screen |
+| 2:45–3:30 | **Open one case fully.** The Screen 2 trail. Say nothing for ten seconds and let them read it. Then point at three lines: the policy rule + version, the capability token, and the verified mandate/pre-debit prerequisite. | Case inspector |
+| 3:30–4:30 | **The number.** Gross versus estimated incremental recovery, its confidence interval, and simulator ground truth. "The honest agent number is ₹2.09 lakh, with this range; the simulator lets us validate the estimator." Then cost per rupee recovered. | Batch run screen |
 | 4:30–5:00 | **Close on the bar.** Stopping rules fired N times, escalations M, every action carries a rule ID and a version, replay reproduces every deterministic decision. Offer to re-run with the same seed. | Policy screen |
 
-**Have ready but off-script:** the Hinglish WhatsApp/voice recovery (a strong 20-second aside if the room is engaged), and the adapter interface file (if anyone challenges the simulation).
+**Have ready but off-script:** the adapter interface file, the policy YAML and the LLM-ablation comparison (if anyone challenges the simulation or the use of AI).
 
 ---
 
@@ -411,6 +431,7 @@ Colour-coded, monospace, scrolling. Cheap to build, and it makes the system feel
 | Scheduler bugs surface only at demo time | Build it in Phase 1 and write property tests: fire-once, cancel-on-terminal, crash-resume |
 | Venue wifi kills the live Razorpay case | Pre-record it; keep the simulated path fully offline |
 | Model latency stalls the batch on stage | Response cache keyed by input hash; degraded-mode fallback; Tier 1 is a minority of cases by design |
+| Live adapter promises an unsupported payment action | Restrict RazorpayTestAdapter to a preflighted Payment Link or test Subscription flow; label all other actions simulated |
 | Incident detector fires forty incidents | Child-segment suppression + dwell, tested against the scenario before demo day |
 | Attribution number looks too good | That's the ground-truth line's job — show the error, not just the estimate |
 | Scope creep back to four domains deep | Checkout and invoice ship as playbook config on the same engine, not new code paths |
@@ -421,10 +442,11 @@ Colour-coded, monospace, scrolling. Cheap to build, and it makes the system feel
 
 The build is done when all of these are true:
 
-1. `pnpm batch scenarios/demo.yaml` runs 300 cases to terminal states under the virtual clock and prints gross, incremental, ground truth, and error.
+1. `pnpm batch scenarios/demo.yaml` runs 400 cases to terminal states under the virtual clock and prints gross, estimated incremental recovery, 95% interval, simulator ground truth and error.
 2. Re-running with the same seed reproduces the output.
 3. Replaying the ledger reproduces every Tier 0 decision.
-4. One case executes end to end against Razorpay test mode with a real payment ID.
+4. One preflighted, supported case executes end to end against Razorpay Test Mode with a real payment ID and verified webhook.
 5. Every executed action in the ledger carries a policy version, a rule ID, and a burned capability token.
-6. The incident path parks, resolves, and staged-releases without oscillating.
+6. The incident path parks and safely releases related cases; advanced anomaly statistics and routing changes remain clearly labelled when simulated.
 7. A judge can open one case and understand what happened without you speaking.
+8. A reviewer can clone the public repository, follow the README and reproduce the seeded synthetic demo without private credentials.

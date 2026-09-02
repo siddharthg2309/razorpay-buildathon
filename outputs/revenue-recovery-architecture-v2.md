@@ -3,6 +3,7 @@
 **Track:** Razorpay Buildathon, Track 03 — AI Revenue Recovery
 **The bar:** measured money recovered across a batch, with compliant escalation, stopping rules, and an audit trail.
 **Supersedes:** `payment-recovery-agent-concept.md` (v1)
+**Implementation provider:** OpenAI Responses API, with Razorpay Test Mode used only for explicitly supported live actions.
 
 ---
 
@@ -12,12 +13,13 @@
 |---|---|---|
 | 3a | ~20 LLM agents; decline-code analysis, fraud scoring, incident correlation all modelled as agents | **5 LLM call sites.** A deterministic Tier 0 resolves ~80% of cases; the model handles the residual, the explanation, and the copy |
 | 3b | Policy gate sits between planner and executor | **Capability tokens.** The gate is the only minter; connectors refuse unsigned calls. Unbypassable by construction |
-| 3c | No scheduler anywhere in the design | **Durable scheduler (L2)** is a first-class component — leased, exactly-once, cancellable, virtual-clock aware |
+| 3c | No scheduler anywhere in the design | **Durable scheduler (L2)** is a first-class component — leased, idempotent, cancellable, virtual-clock aware |
 | 3d | "idempotency" and "coordinate" asserted | **Obligation lease + idempotency keys + contact-budget ledger + incident attachment**, all specified |
 | 3e | Incident parks cases, resumption unspecified | **Release controller** with ramp, jitter, and circuit breaker; reroute gets canary + auto-rollback + TTL |
 | 3f | "Rolling windows vs baseline" | **Seasonal per-segment baselines**, volume floor, two-proportion z-test, dwell, BH correction, auto-close, child-segment suppression |
 | §4 | Global card vocabulary; Razorpay unmentioned | **India rails first-class**: UPI AutoPay, e-NACH, RBI e-mandate, AFA, pre-debit notification, DLT/TRAI, WhatsApp windows, Razorpay APIs |
 | §5 | Attribution is one paragraph | **Attribution service** with stratified holdout and an incremental-recovery estimator as the headline metric |
+| §4 implementation | Anthropic-specific SDK, model names and cache controls | **OpenAI Responses API**, strict Structured Outputs, provider-neutral model configuration and OpenAI prompt-cache telemetry |
 
 ---
 
@@ -62,7 +64,7 @@ flowchart TB
 
     subgraph L4["L4 — Reason"]
         T0["Tier 0: deterministic classifier"]
-        T1["Tier 1: LLM synthesizer + planner"]
+        T1["Tier 1: OpenAI synthesizer + planner"]
         T2["Tier 2: human queue"]
     end
 
@@ -96,6 +98,104 @@ flowchart TB
 
 ---
 
+## 2a. Executable workflows
+
+The product is agentic in **reasoning**, but not in uncontrolled execution. A model can rank hypotheses and propose an action from the action library. The policy engine and connector decide whether anything external happens.
+
+```mermaid
+sequenceDiagram
+    participant S as Razorpay / client / timer
+    participant I as Ingest + dedup
+    participant C as Case fabric
+    participant E as Evidence + decision ladder
+    participant P as Policy + capability gate
+    participant X as Connector / simulator
+    participant V as Verifier + ledger
+
+    S->>I: signed webhook, checkout event, or due timer
+    I->>C: normalize, deduplicate, lock obligation
+    C->>E: scoped evidence package
+    E->>E: Tier 0 resolve or OpenAI reason
+    E->>P: proposed known action + stop conditions
+    alt allowed and supported by selected connector
+        P->>X: single-use capability + idempotency key
+        X->>V: status, webhook, or simulated outcome
+    else blocked, unsupported, or uncertain
+        P->>V: rule-backed block or human escalation
+    end
+    V->>C: recovered, scheduled, suppressed, or terminal state
+    V->>V: append-only audit event
+```
+
+An incident uses the same case fabric. It does **not** independently retry every affected obligation.
+
+```mermaid
+flowchart LR
+    A[Payment events + Razorpay downtime signal] --> B[Segmented anomaly detector]
+    B -->|meaningful deviation| C[Incident]
+    C --> D[Attach and suppress related cases]
+    C --> E[OpenAI RCA narrative + proposed supported action]
+    E --> F[Policy / human approval]
+    F --> G[Simulated canary or supported operational action]
+    G --> H[Monitor approval rate]
+    H -->|healthy| I[Staged case release]
+    H -->|unhealthy| D
+```
+
+## 2b. Agent architecture at a glance
+
+The “agents” are governed specialist roles that share the same case record. They do not hand work to one another through an open-ended chat, and the OpenAI layer never receives a credential that can move money or contact a customer directly.
+
+```mermaid
+flowchart TB
+    subgraph Signals["Payment signals"]
+        RZPW["Razorpay webhooks<br/>(payment, subscription, link)"]
+        APP["Checkout and invoice events"]
+        TIMER["Timers: due dates and follow-ups"]
+        ANOM["Anomaly and downtime detector"]
+    end
+
+    RZPW & APP & TIMER --> ING["L0 — Ingest<br/>verify, normalize, deduplicate"]
+    ING --> CASE["L2 — Case fabric<br/>state, evidence timeline, idempotency, budgets"]
+    ANOM --> INC["Incident case<br/>scope and suppress related cases"]
+    INC --> CASE
+
+    CASE --> EVID["Evidence builder<br/>payment state, history, risk, prior attempts"]
+    EVID --> ROUTE{"Known deterministic<br/>cause?"}
+    ROUTE -->|yes| T0["Tier 0 playbook<br/>deterministic recovery"]
+    ROUTE -->|no or ambiguous| T1["Tier 1 — OpenAI<br/>diagnose, plan, compose"]
+
+    T0 --> GOV["Policy and capability governor<br/>consent, quiet hours, mandates,<br/>attempt caps, budgets, permissions"]
+    T1 --> GOV
+    GOV -->|allowed and supported| EXEC["Capability executor"]
+    GOV -->|blocked or uncertain| HUMAN["Human escalation or safe stop"]
+
+    EXEC --> LIVE["Razorpay Test Mode<br/>narrow supported live proof"]
+    EXEC --> SIM["Synthetic PSP simulator<br/>unsupported recovery actions"]
+    LIVE & SIM --> VERIFY["Verifier and recovery ledger<br/>reconcile, attribute, audit, measure"]
+    VERIFY --> CASE
+    VERIFY --> DASH["Operations dashboard<br/>case drilldown and batch recovery"]
+```
+
+### The per-case specialist workflow
+
+```mermaid
+flowchart LR
+    CASE["Scoped case evidence"] --> DIAG["1. Diagnosis agent<br/>classify cause and confidence"]
+    DIAG --> PLAN["2. Recovery planner<br/>select next-best known action"]
+    PLAN --> COPY["3. Message composer<br/>fill approved template slots"]
+    COPY --> CHECK["4. Policy agent<br/>validate constraints"]
+    CHECK -->|approved| ACT["5. Executor<br/>invoke bounded capability"]
+    CHECK -->|not approved| ESC["Escalate or stop safely"]
+    ACT --> OBS["6. Verifier<br/>observe provider outcome"]
+    OBS --> LEDGER["Ledger and metrics<br/>recovery, cost, confidence"]
+    LEDGER --> CASE
+```
+
+**Safety boundary:** OpenAI can recommend a known action and draft approved copy. It cannot mint a capability token, bypass policy, invoke a connector, or declare a payment recovered. Those decisions remain deterministic, logged, and independently verified.
+
+---
+
 ## 3. The decision ladder (fix 3a)
 
 Every case enters at Tier 0 and escalates only if it must.
@@ -108,7 +208,7 @@ Every case enters at Tier 0 and escalates only if it must.
 
 ### Why this is the stronger AI story
 
-The obvious question from a judge is *"why does this need an LLM at all?"* The ladder answers it with a number: the audit ledger records the tier for every case, so the demo can state **"the model changed the outcome on N of 300 cases — here are three of them"**, rather than asserting intelligence.
+The obvious question from a judge is *"why does this need an LLM at all?"* The ladder answers it with a number: the audit ledger records the tier for every case, so the demo can state **"the model changed the outcome on N of this batch's cases — here are three of them"**, rather than asserting intelligence.
 
 It also makes the audit trail reproducible. A Tier 0 decision cites a rule ID; replaying the ledger yields the identical plan. Only Tier 1 decisions carry model non-determinism, and those are the minority.
 
@@ -127,35 +227,27 @@ It also makes the audit trail reproducible. A Tier 0 decision cites a rule ID; r
 
 ---
 
-## 4. The five LLM call sites
+## 4. The five OpenAI call sites
 
-Each has a strict JSON schema (structured outputs via `output_config.format`), a bounded input, and no direct tool access to anything that moves money.
+Every model call uses the OpenAI Node SDK and the Responses API. It returns a strict JSON Schema through `text.format`; it has a bounded, redacted input; and it has no connector, policy-minting, or money-moving tool access.
 
-| # | Call site | Fires when | Model | Effort | Output |
+| # | Call site | Fires when | Default model | Effort | Output |
 |---|---|---|---|---|---|
-| 1 | **Diagnosis synthesizer** | Tier 0 confidence < threshold, or evidence conflicts | `claude-sonnet-5` | `medium` | Ranked hypotheses, confidence, cited evidence IDs |
-| 2 | **Recovery planner** | >1 eligible plan, or no playbook match | `claude-opus-5` | `high` | Ordered action IDs + params + stop conditions |
-| 3 | **Message composer** | Any customer-facing copy | `claude-sonnet-5` | `low` | Template slot values, language `en`/`hi`/`hinglish` |
-| 4 | **Incident RCA narrator** | Incident opened | `claude-opus-5` | `high` | Root-cause narrative + proposed system action |
-| 5 | **Reply interpreter** | Inbound customer message | `claude-haiku-4-5` | — | Enum intent + extracted fields only |
+| 1 | **Diagnosis synthesizer** | Tier 0 confidence is below threshold, or evidence conflicts | `gpt-5.6-terra` | `medium` | Ranked hypotheses, confidence, cited evidence IDs |
+| 2 | **Recovery planner** | More than one eligible plan, or no playbook match | `gpt-5.6-sol` | `high` | Ordered *known* action IDs, parameters, and stop conditions |
+| 3 | **Message composer** | An approved customer-facing template needs language/slot values | `gpt-5.6-luna` | `none` or `low` | Template slot values only; no recipient or link changes |
+| 4 | **Incident RCA narrator** | An incident opens | `gpt-5.6-terra` | `high` | Root-cause narrative plus supported proposed action |
+| 5 | **Reply interpreter** | An inbound customer message arrives | `gpt-5.6-luna` | `none` | Intent enum and extracted fields only |
 
-### Routing rationale
+Model IDs are configuration, not business logic. A startup capability check may select approved substitutes, but the ledger always records the actual model and reasoning effort used.
 
-- **Opus 5** ($5/$25 per MTok, 1M context) for the two judgement-heavy sites — plan selection and incident RCA — where a wrong call costs real money.
-- **Sonnet 5** ($3/$15) for synthesis and composition: high volume, well-scoped, schema-constrained.
-- **Haiku 4.5** ($1/$5) for reply classification — the highest-volume, lowest-judgement site.
+### OpenAI request contract
 
-Adaptive thinking is on by default on Opus 5; effort is the cost lever. `low`/`medium` are unusually strong on this generation, so start at the table above and sweep down against the eval set rather than defaulting everything to `high`.
-
-### Prompt caching
-
-Each call site has a frozen system prompt: role, the action library, the policy summary, the decline taxonomy. That prefix is stable across every case, so it caches. Opus 5's minimum cacheable prefix is **512 tokens** (down from 1024 on Opus 4.8), which most of these prompts clear comfortably.
-
-Cache hygiene, because caching is a prefix match:
-- Never interpolate case ID, timestamp, or merchant name into the system prompt — those go in the user turn, after the breakpoint.
-- Serialize the action library deterministically (sort by ID). An unsorted `json.dumps` silently invalidates every cache entry.
-- Keep the tool list identical across calls at a given site. Tools render at position 0; changing them invalidates everything.
-- Verify with `usage.cache_read_input_tokens` — if it is zero across repeated cases, something in the prefix is varying.
+- Use `openai.responses.create()` with `text.format: { type: "json_schema", ... }`; reject any response that fails schema validation.
+- Keep stable instructions, the sorted action library, policy summary, and decline taxonomy first. Put case-specific evidence last.
+- Use a stable `prompt_cache_key` per call site and record OpenAI cached-token and cache-write telemetry in the ledger.
+- Keep the LLM stateless per case unless a bounded follow-up genuinely needs its prior response. Case state lives in the database and evidence board, not in chat history.
+- Store response ID, model, schema version, latency, usage, and validation result. Store prompt hashes and redacted inputs, not raw PII.
 
 ### Prompt-injection posture
 
@@ -168,7 +260,7 @@ Call sites 3 and 5 touch untrusted text — inbound emails, WhatsApp replies, pr
 
 ### Degraded mode
 
-If the model is unavailable or rate-limited, cases do not stall — money is on a clock. Tier 1 falls back to the Tier 0 default playbook for the rail, flags `degraded: true` in the ledger, and continues. The system fails **safe and collecting**, not stopped.
+If the model is unavailable or rate-limited, the case uses Tier 0 **only when an explicit, policy-allowed playbook exists**. Otherwise it moves to human escalation or a stopped-safe state. A model outage must never manufacture a generic recovery action. The ledger records `degraded: true` either way.
 
 ---
 
@@ -229,7 +321,7 @@ FOR UPDATE SKIP LOCKED
 LIMIT 50;
 ```
 
-- **Exactly-once**: lease acquisition and terminal-state write happen in one transaction. A crashed worker's lease expires and the row is re-picked.
+- **Leased dispatch, not magical exactly-once I/O**: database lease acquisition and terminal writes are transactional. An external connector call is at-least-once and must carry an idempotency key; after a crash, an `in_flight` attempt is reconciled before it can be retried.
 - **Cancellable**: any terminal case transition cancels every pending row for that case in the same transaction. This is how a payment that succeeds on its own stops the dunning sequence.
 - **Virtual clock**: `now` comes from a `Clock` interface. In production it is wall time; in the demo it is a controllable counter. This is what makes a 14-day dunning sequence run in 90 seconds on stage.
 
@@ -321,7 +413,7 @@ This is where the track is judged and where v1 was silent — the word "Razorpay
 
 ### Regulatory constraints, as policy config
 
-- **RBI e-mandate**: AFA on registration and on debits above the configured threshold; pre-debit notification ahead of every debit. The mandate retry sequencer must schedule the *notification* before the *retry* — this is a named example direction in the brief and a clean demo beat.
+- **RBI e-mandate**: treat mandate/AFA/pre-debit state as a hard prerequisite. In live Razorpay subscription flows, the issuer/provider owns the actual notification/debit sequence; the agent verifies the prerequisite and never claims to replace it. In the simulator, the same prerequisite is visible as a policy event before a debit attempt.
 - **Card network retry rules**: hard vs soft decline taxonomy, per-code retry ceilings.
 - **TRAI / DLT** for SMS: registered header and template, DND scrubbing, no promotional traffic in restricted hours.
 - **WhatsApp Business**: approved templates outside the 24-hour session window.
@@ -331,7 +423,7 @@ All of these are **policy config with a version**, not code — because they dif
 
 ### Razorpay surface (test mode)
 
-Orders, Payments, Payment Links, Subscriptions, Invoices, Smart Collect, Webhooks, Payment Downtime. Executing through these — real links, real webhook callbacks — is the difference between *"we designed a recovery agent"* and *"we recovered ₹X in test mode; here are the payment IDs."*
+The live proof path is deliberately narrow: signed Test Mode webhooks plus one supported Payment Link or test Subscription flow. Payment Links, subscription retries, generic one-time payment retries, and routing overrides are different capabilities; the adapter exposes only what Razorpay actually supports. The simulator covers the larger action library and labels those actions as simulated.
 
 ---
 
@@ -339,13 +431,15 @@ Orders, Payments, Payment Links, Subscriptions, Invoices, Smart Collect, Webhook
 
 The bar says **measured** money recovered. This is the component that produces that number honestly, and it is the single most defensible thing in the build.
 
-- **Holdout**: randomised at case creation (default 10%), stratified by cause and value band, assignment written immutably to the ledger.
+- **Holdout**: randomised at case creation (default 20% for the synthetic demo), stratified by cause and value band, assignment written immutably to the ledger.
 - **Estimator**:
   `incremental = (recovery_rate_treated − recovery_rate_holdout) × treated_volume × mean_value_at_risk`
 - **Window**: fixed per domain — 14 days for dunning, 48h for checkout, 30 days for invoices.
 - **Exclusions**: payments recovered by the merchant's own existing dunning, and self-service customer retries occurring before first agent contact.
 - **Normalisation**: a recovered renewal counts once as cash collected. It is *not* also counted as retained MRR in the headline; MRR is a breakdown, not an addend.
-- **Reporting**: show gross and incremental side by side, clearly labelled. Being the team that knows the difference is the flex.
+- **Uncertainty**: show a 95% confidence interval for recovery-rate lift and a bootstrap interval for incremental recovered rupees.
+- **LLM ablation**: run the same seeded scenario with Tier 1 enabled and with Tier 0 fallback to measure the incremental contribution of model reasoning.
+- **Reporting**: show gross and incremental side by side, clearly labelled. Simulator ground truth is validation-only and is never presented as production-observable.
 
 Metrics beyond the headline: recovery rate by cause / rail / issuer, approval-rate delta after an incident action, time to recovery, cost per rupee recovered (including model spend), contact volume per recovered rupee.
 
