@@ -1,0 +1,113 @@
+# Tier 0 playbooks: (domain, cause) -> a default plan.
+#
+# Steps name action ids from actions/library.yaml and nothing else. A step whose
+# action is `wait` or another schedule-kind action produces a scheduled_actions
+# row, not a connector call.
+
+version: 1
+
+playbooks:
+  - domain: subscription_renewal
+    cause: insufficient_funds
+    rule_id: PB-SUB-001
+    # The provider owns the mandate retry cycle. We notify and observe rather
+    # than issuing a charge of our own.
+    steps:
+      - { action: send_approved_template, params: { template_id: WA_FUNDS_REMINDER } }
+      - { action: wait, params: { delay_hours: 48, reason: awaiting_payday } }
+      - { action: await_provider_retry, params: { expected_at_hours: 72 } }
+    stop_conditions: [paid, opted_out, disputed, attempt_ceiling]
+
+  - domain: subscription_renewal
+    cause: mandate_revoked
+    rule_id: PB-SUB-002
+    # Hard failure: no debit can succeed. Retrying a revoked mandate is exactly
+    # the behaviour the stopping rules exist to prevent.
+    steps:
+      - { action: request_payment_method_update, params: { reason_code: MANDATE_REVOKED, channel: whatsapp } }
+      - { action: wait, params: { delay_hours: 72, reason: awaiting_new_mandate } }
+      - { action: create_ops_escalation, params: { queue: retention, sla_hours: 48 } }
+    stop_conditions: [paid, opted_out, method_updated]
+
+  - domain: subscription_renewal
+    cause: mandate_cap_breach
+    rule_id: PB-SUB-003
+    steps:
+      - { action: request_payment_method_update, params: { reason_code: MANDATE_AMOUNT_EXCEEDED, channel: whatsapp } }
+      - { action: await_mandate_prerequisite, params: { prerequisite: pre_debit_notified } }
+      - { action: await_provider_retry, params: { expected_at_hours: 72 } }
+    stop_conditions: [paid, opted_out, attempt_ceiling]
+
+  - domain: subscription_renewal
+    cause: prerequisite_missing
+    rule_id: PB-SUB-004
+    # RBI ordering: the notification must precede the debit. We verify the
+    # prerequisite; the provider owns sending it.
+    steps:
+      - { action: await_mandate_prerequisite, params: { prerequisite: pre_debit_notified } }
+      - { action: await_provider_retry, params: { expected_at_hours: 24 } }
+    stop_conditions: [paid, opted_out]
+
+  - domain: payment_failure
+    cause: expired_card
+    rule_id: PB-PAY-001
+    steps:
+      - { action: request_payment_method_update, params: { reason_code: EXPIRED_CARD, channel: email } }
+      - { action: wait, params: { delay_hours: 48, reason: awaiting_update } }
+      - { action: create_payment_link, params: { expiry_hours: 72 } }
+    stop_conditions: [paid, opted_out, method_updated, attempt_ceiling]
+
+  - domain: payment_failure
+    cause: insufficient_funds
+    rule_id: PB-PAY-002
+    steps:
+      - { action: wait, params: { delay_hours: 48, reason: awaiting_payday } }
+      - { action: create_payment_link, params: { expiry_hours: 72 } }
+    stop_conditions: [paid, opted_out, attempt_ceiling]
+
+  - domain: payment_failure
+    cause: gateway_timeout
+    rule_id: PB-PAY-003
+    steps:
+      - { action: create_payment_link, params: { expiry_hours: 24 } }
+    stop_conditions: [paid, opted_out, attempt_ceiling]
+
+  - domain: payment_failure
+    cause: issuer_decline
+    rule_id: PB-PAY-004
+    steps:
+      - { action: create_payment_link, params: { expiry_hours: 72 } }
+      - { action: wait, params: { delay_hours: 72, reason: soft_decline_backoff } }
+    stop_conditions: [paid, opted_out, attempt_ceiling]
+
+  - domain: payment_failure
+    cause: otp_failure
+    rule_id: PB-PAY-005
+    steps:
+      - { action: create_payment_link, params: { expiry_hours: 24 } }
+    stop_conditions: [paid, opted_out, attempt_ceiling]
+
+  - domain: payment_failure
+    cause: fraud_flag
+    rule_id: PB-PAY-006
+    # No customer contact on a fraud signal — escalate and stop.
+    steps:
+      - { action: create_ops_escalation, params: { queue: risk, sla_hours: 4 } }
+    stop_conditions: [human_closed]
+
+  - domain: checkout_abandonment
+    cause: session_expired
+    rule_id: PB-CHK-001
+    steps:
+      - { action: resume_checkout, params: { preserve_cart: true } }
+      - { action: wait, params: { delay_hours: 24, reason: single_nudge_only } }
+    stop_conditions: [paid, opted_out, session_expired]
+
+  - domain: overdue_invoice
+    cause: presentation_failed
+    rule_id: PB-INV-001
+    steps:
+      - { action: send_approved_template, params: { template_id: EM_INVOICE_DUE } }
+      - { action: wait, params: { delay_hours: 120, reason: b2b_payment_cycle } }
+      - { action: create_ops_escalation, params: { queue: collections, sla_hours: 72 } }
+    stop_conditions: [paid, opted_out, disputed]

@@ -1,0 +1,52 @@
+# Decline taxonomy, per rail.
+#
+# This is what makes Tier 0 possible: a known (rail, code) pair resolves to a
+# cause, a confidence and a rule_id with zero model calls, and replaying the
+# ledger reproduces the identical plan.
+#
+# hardness:
+#   hard - the instrument or mandate cannot succeed as-is. Retrying is not just
+#          wasteful, it is the behaviour card networks penalise. Recovery means
+#          changing something (new instrument, new mandate) or stopping.
+#   soft - the same instrument may succeed later. Retry is legitimate, subject
+#          to the per-code ceiling.
+#
+# An unmapped code deliberately falls through to Tier 1. The demo scenario
+# seeds ~5% unmapped so that path is exercised.
+
+version: 1
+
+codes:
+  # ------------------------------------------------------------------- cards
+  - { rail: card, code: INSUFFICIENT_FUNDS, cause: insufficient_funds, hardness: soft, retry_eligible: true,  retry_ceiling: 3, confidence: 0.95, rule_id: T0-CARD-001 }
+  - { rail: card, code: EXPIRED_CARD,       cause: expired_card,       hardness: hard, retry_eligible: false, retry_ceiling: 0, confidence: 0.98, rule_id: T0-CARD-002 }
+  - { rail: card, code: DO_NOT_HONOUR,      cause: issuer_decline,     hardness: soft, retry_eligible: true,  retry_ceiling: 2, confidence: 0.80, rule_id: T0-CARD-003 }
+  - { rail: card, code: OTP_FAILURE,        cause: otp_failure,        hardness: soft, retry_eligible: true,  retry_ceiling: 2, confidence: 0.90, rule_id: T0-CARD-004 }
+  - { rail: card, code: INVALID_TOKEN,      cause: invalid_token,      hardness: hard, retry_eligible: false, retry_ceiling: 0, confidence: 0.97, rule_id: T0-CARD-005 }
+  - { rail: card, code: STOLEN_CARD,        cause: fraud_flag,         hardness: hard, retry_eligible: false, retry_ceiling: 0, confidence: 0.99, rule_id: T0-CARD-006 }
+
+  # -------------------------------------------------------------- UPI AutoPay
+  - { rail: upi_autopay, code: MANDATE_REVOKED,          cause: mandate_revoked,     hardness: hard, retry_eligible: false, retry_ceiling: 0, confidence: 0.99, rule_id: T0-UPI-001 }
+  - { rail: upi_autopay, code: MANDATE_PAUSED,           cause: mandate_paused,      hardness: hard, retry_eligible: false, retry_ceiling: 0, confidence: 0.96, rule_id: T0-UPI-002 }
+  - { rail: upi_autopay, code: MANDATE_AMOUNT_EXCEEDED,  cause: mandate_cap_breach,  hardness: soft, retry_eligible: true,  retry_ceiling: 1, confidence: 0.94, rule_id: T0-UPI-003 }
+  - { rail: upi_autopay, code: INSUFFICIENT_FUNDS,       cause: insufficient_funds,  hardness: soft, retry_eligible: true,  retry_ceiling: 3, confidence: 0.95, rule_id: T0-UPI-004 }
+  - { rail: upi_autopay, code: PAYER_APP_DOWN,           cause: payer_app_down,      hardness: soft, retry_eligible: true,  retry_ceiling: 3, confidence: 0.88, rule_id: T0-UPI-005 }
+  - { rail: upi_autopay, code: PRE_DEBIT_NOT_SENT,       cause: prerequisite_missing, hardness: soft, retry_eligible: true, retry_ceiling: 1, confidence: 0.99, rule_id: T0-UPI-006 }
+
+  # ----------------------------------------------------------- UPI collect
+  - { rail: upi_collect, code: REQUEST_EXPIRED,   cause: collect_expired,   hardness: soft, retry_eligible: true, retry_ceiling: 2, confidence: 0.92, rule_id: T0-UPIC-001 }
+  - { rail: upi_collect, code: PAYER_UNAVAILABLE, cause: payer_unavailable, hardness: soft, retry_eligible: true, retry_ceiling: 2, confidence: 0.85, rule_id: T0-UPIC-002 }
+  - { rail: upi_collect, code: PSP_TIMEOUT,       cause: gateway_timeout,   hardness: soft, retry_eligible: true, retry_ceiling: 3, confidence: 0.90, rule_id: T0-UPIC-003 }
+
+  # ---------------------------------------------------------------- e-NACH
+  - { rail: enach, code: MANDATE_NOT_ACTIVE,      cause: mandate_revoked,    hardness: hard, retry_eligible: false, retry_ceiling: 0, confidence: 0.98, rule_id: T0-NACH-001 }
+  - { rail: enach, code: PRESENTATION_REJECTED,   cause: presentation_failed, hardness: soft, retry_eligible: true, retry_ceiling: 2, confidence: 0.86, rule_id: T0-NACH-002 }
+  - { rail: enach, code: INSUFFICIENT_FUNDS,      cause: insufficient_funds,  hardness: soft, retry_eligible: true, retry_ceiling: 2, confidence: 0.95, rule_id: T0-NACH-003 }
+
+  # ----------------------------------------------------------- netbanking
+  - { rail: netbanking, code: BANK_DOWNTIME,   cause: gateway_timeout, hardness: soft, retry_eligible: true, retry_ceiling: 3, confidence: 0.93, rule_id: T0-NB-001 }
+  - { rail: netbanking, code: SESSION_EXPIRED, cause: session_expired, hardness: soft, retry_eligible: true, retry_ceiling: 2, confidence: 0.91, rule_id: T0-NB-002 }
+
+  # -------------------------------------------------------------- wallets
+  - { rail: wallet, code: INSUFFICIENT_BALANCE, cause: insufficient_funds, hardness: soft, retry_eligible: true,  retry_ceiling: 2, confidence: 0.94, rule_id: T0-WAL-001 }
+  - { rail: wallet, code: KYC_LIMIT,            cause: kyc_limit,          hardness: hard, retry_eligible: false, retry_ceiling: 0, confidence: 0.97, rule_id: T0-WAL-002 }
