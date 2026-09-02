@@ -24,18 +24,20 @@ That turns the biggest apparent weakness into the strongest claim in the room.
 | Concern | Choice |
 |---|---|
 | Runtime | Node 22, TypeScript |
-| DB | Postgres (`FOR UPDATE SKIP LOCKED` is the scheduler primitive; JSONB for evidence/ledger) |
+| DB | Postgres (`FOR UPDATE SKIP LOCKED` is the scheduler primitive; JSONB for blackboard claims, evidence, and ledger) |
 | Migrations | drizzle or plain SQL files — no ORM ceremony |
 | Queue | in-process worker loop over the `scheduled_actions` table; no external broker |
-| LLM | `openai` Node SDK + Responses API — GPT-5.6 Sol / Terra / Luna, configured per call site |
+| Agent runtime | Case blackboard, work router, parallel role workers, deliberation reducer, constrained optimizer |
+| LLM | `LLMProvider` interface; `OpenAIResponsesProvider` uses the OpenAI Node SDK + Responses API. Models are configured per specialist role |
 | Web console | Next.js + Tailwind, server components where possible |
 | Terminal view | plain Node + `chalk`, reading the same event stream over SSE |
 | Charts | hand-rolled SVG — no chart lib, the visuals here are simple and a library is a dependency risk |
 
 ```
 /packages
-  /core          types, case state machine, policy engine, taxonomy
-  /engine        L0–L7 workers: ingest, detect, reason, govern, act, verify
+  /core          types, event reducer, case state machine, policy engine, taxonomy
+  /agents        role contracts, work router, claim reducer, optimizer, LLMProvider
+  /engine        L0–L7 workers: ingest, detect, blackboard, govern, act, verify
   /connectors    PSPAdapter interface + SimulatedPSP + RazorpayTestAdapter
   /sim           event simulator, virtual clock, scenarios, ground truth
   /attribution   holdout assignment, estimator, batch runner
@@ -55,14 +57,15 @@ Hours assume a small team working in parallel. **P1 = must exist for the demo. P
 
 - Monorepo, TS config, Postgres up, migration runner.
 - **`Clock` interface** implemented on day one — `RealClock` and `VirtualClock`. Every single component takes a clock. Retrofitting this later is the most expensive mistake available.
-- Shared types: `Case`, `Obligation`, `Evidence`, `Action`, `Plan`, `LedgerEntry`.
-- Append-only `ledger` writer with a single `append(caseId, actor, type, payload)`.
+- Shared types: `Case`, `CaseEvent`, `CaseRevision`, `Evidence`, `Claim`, `AgentRun`, `Action`, `Plan`, `LedgerEntry`.
+- Deterministic event reducer: `(previousRevision, CaseEvent) → CaseRevision`; it is the sole writer of case state.
+- Append-only `case_events` and `ledger` writers. The event log is the replay input; the ledger is the decision/side-effect audit.
 
-**Done when:** `pnpm test` runs, a ledger row can be written and read back, and the virtual clock can be advanced.
+**Done when:** `pnpm test` runs, an event reduces to a reproducible case revision, the ledger can be written and read back, and the virtual clock can be advanced.
 
 ### Phase 1 — Case fabric + scheduler (6h, P1)
 
-- `obligations`, `cases` tables; case state machine with explicit legal transitions (reject illegal ones loudly).
+- `obligations`, `cases`, `case_events`, and `case_revisions` tables; case state machine with explicit legal transitions (reject illegal ones loudly).
 - Obligation dedup on `(merchant, external_ref)`; obligation lease table.
 - **Durable scheduler**: `scheduled_actions`, leased tick worker, cancel-on-terminal in the same transaction.
 
@@ -70,14 +73,15 @@ Hours assume a small team working in parallel. **P1 = must exist for the demo. P
 
 *This phase is the spine. If it is shaky, everything downstream is.*
 
-### Phase 2 — Evidence + Tier 0 (5h, P1)
+### Phase 2 — Blackboard, Tier 0, and work routing (6h, P1)
 
-- Evidence board: typed, append-only, each row carries source and observation time.
+- Case blackboard: typed, append-only evidence plus versioned, expiring claims. Each row carries source, observation time, and case revision.
 - **Decline taxonomy for India rails** — cards, UPI AutoPay, e-NACH, netbanking, wallets. Hard vs soft, retry eligibility, per-code ceiling.
 - Deterministic classifier: `(rail, code, context) → cause, confidence, rule_id`.
 - Playbook table: `(domain, cause) → default plan`.
+- Work router: `(event type, changed facts, case state) → required specialist roles`; it invalidates stale claims instead of rerunning every agent.
 
-**Done when:** a simulated `payment_failed` with `INSUFFICIENT_FUNDS` on UPI AutoPay produces a cause, a confidence, a rule ID, and a plan — with zero model calls.
+**Done when:** a simulated `payment_failed` with `INSUFFICIENT_FUNDS` on UPI AutoPay produces a cause, confidence, rule ID, and plan—with zero model calls—and an inbound reply invalidates only context/communication claims.
 
 ### Phase 3 — Policy engine + capability tokens (5h, P1)
 
@@ -106,18 +110,21 @@ Hours assume a small team working in parallel. **P1 = must exist for the demo. P
 
 **Done when:** a verified collection or provider-confirmed retry moves the case to `RECOVERED` and the remaining scheduled actions vanish from the schedule.
 
-### Phase 6 — The OpenAI reasoning tier (6h, P1)
+### Phase 6 — Agent runtime + OpenAI provider adapter (7h, P1)
 
-Implement the five call sites from architecture §4 through one provider-neutral `Reasoner` interface. For each:
+Implement the §4 runtime. `OpenAIResponsesProvider` is one implementation of `LLMProvider`, not the orchestration layer.
 
-- `openai.responses.create()` with `text.format` JSON Schema — the model returns structured data, never prose the engine has to parse.
-- Stable instructions/action library first, dynamic redacted evidence last, and a stable `prompt_cache_key` per call site.
-- Bounded input assembled from evidence refs, PII-redacted.
-- Injection posture: reply interpreter returns enum + fields only, no tool access.
-- Store response ID, model, schema version, latency, usage and validation result in the ledger.
+- Role registry with evidence scope, permitted retrieval tools, JSON claim schema, timeout, call budget, and cache key per role.
+- Run independent roles concurrently with `Promise.allSettled`; persist every run and claim against one `case_revision` before the reducer sees them.
+- P1 specialists: payment diagnosis, customer/context, incident intelligence, recovery economics, communication, and deliberation reducer. The recovery-economics role is deterministic in P1.
+- Reducer: deterministic precedence/conflict rules first; invoke the provider only for material unresolved conflict. It must return a strategy and rejected alternatives, never an executable connector call.
+- Constrained optimizer: rank permitted action-library candidates by expected incremental value, cost, model spend, and risk penalty.
+- The OpenAI adapter uses `openai.responses.create()` with `text.format` JSON Schema. Give it bounded redacted evidence, stable instructions first, and a `prompt_cache_key` per specialist role.
+- Injection posture: reply interpretation returns enum + fields only, no tool access. Communication fills approved template slots only.
+- Store provider/model, schema version, latency, usage, validation result, reducer trace, and optimizer scores in the ledger.
 - **Degraded-mode fallback** only to an explicit, policy-allowed Tier 0 playbook; otherwise escalate or stop safely.
 
-**Done when:** an unmapped decline code routes to Tier 1, the synthesizer returns a schema-valid hypothesis citing evidence IDs, the planner returns action IDs from the library only, and OpenAI cached-token telemetry is visible on a repeated case.
+**Done when:** an ambiguous failure fans out to the required specialists; they persist cited claims for the same case revision; the reducer records why it accepted or rejected conflicting claims; the optimizer ranks known actions; and OpenAI cache telemetry is visible on a repeated agent run.
 
 ### Phase 7 — Incident mode (6h, P1 core + P2 hardening)
 
@@ -135,7 +142,7 @@ Implement the five call sites from architecture §4 through one provider-neutral
 
 - Holdout assignment at case creation: stratified by cause and value band, written immutably.
 - Estimator per architecture §10, with per-domain measurement windows, exclusion rules, a 95% confidence interval and a bootstrap interval for incremental rupees.
-- LLM ablation runner: same seed with Tier 1 enabled versus Tier 0 fallback.
+- Agent-runtime ablation runner: same seed with parallel specialist claims enabled versus Tier 0 fallback; report provider spend and model-call rate separately.
 - **Batch runner**: load a scenario, create N cases, run to completion under the virtual clock, emit the attribution report.
 
 **Done when:** `pnpm batch scenarios/demo.yaml` prints gross recovered, incremental recovered, holdout rate, treated rate, and cost per rupee.
@@ -251,13 +258,13 @@ injections:
     duration: 40m
 ```
 
-The `unmapped_code` slice exists purely so Tier 1 fires during the demo and you can point at a case the model actually resolved. The synthetic batch is not presented as live merchant traffic; its hidden ground truth validates the holdout estimator.
+The `unmapped_code` slice exists purely so Tier 1 fires during the demo and you can point at a case where parallel specialist claims changed the plan. The synthetic batch is not presented as live merchant traffic; its hidden ground truth validates the holdout estimator.
 
 ### 3e. Determinism and replay
 
 - One seed drives customer generation, outcome sampling, and injection timing. Same seed, same run, every time — so you can rehearse the demo and so a judge can ask you to run it again.
-- Tier 1 model calls are the only non-deterministic element. Cache their responses keyed by input hash so a replay is fully reproducible; the cache is transparent and shown in the UI.
-- **Ledger replay verifier**: re-run the ledger through the engine and assert every Tier 0 decision reproduces. This is how you *prove* the audit trail rather than just displaying a table of it.
+- Provider-backed agent calls are the only non-deterministic element. Cache their structured claims by role and input hash so a replay is fully reproducible; the cache is transparent and shown in the UI.
+- **Replay verifier**: re-run `case_events` through the event reducer; assert every Tier 0 decision reproduces and every Tier 1 run reproduces its stored claims, reducer trace, and optimizer inputs. This is how you *prove* the audit trail rather than just displaying a table of it.
 
 ### 3f. The one real thing
 
@@ -274,7 +281,7 @@ The batch must include different recovery paths, not 400 cosmetic copies of one 
 | **Payment: gateway timeout** | `payment.failed`, timeout evidence, affected segment | Offer a supported Payment Link/alternate checkout in simulation; attach to an incident when relevant | Cause-aware intervention |
 | **Checkout abandonment** | Local checkout fixture records last stage, no completion after virtual inactivity | Preserve cart and create a return-to-checkout path | First-party funnel event, not a fake PSP webhook |
 | **B2B invoice: missing PO** | Invoice overdue; reply interpreter extracts `MISSING_PO` | Pause collection, request PO through approved template, then resume | Collections without aggressive automation |
-| **Ambiguous/unmapped failure** | Conflicting evidence or an unknown code | OpenAI diagnosis + planner proposes only known action IDs | Meaningful bounded AI reasoning |
+| **Ambiguous/unmapped failure** | Conflicting evidence or an unknown code | Parallel specialist claims → reducer → optimizer proposes only known action IDs | Meaningful bounded multi-agent deliberation |
 | **Gateway incident** | Seeded approval-rate fall or Razorpay downtime event across a segment | Open incident, suppress child actions, propose supported/simulated remediation, staged release | Event-driven plus incident-driven coordination |
 | **Policy block** | Quiet hours, contact budget exhausted, dispute, or opt-out | Block action and emit a rule-backed terminal/audit event | Bounded execution and auditability |
 
@@ -353,12 +360,12 @@ The decision trail for one case, top to bottom, nothing hidden. This is the scre
 │                       code MANDATE_AMOUNT_EXCEEDED               │
 │ T+0h00  EVIDENCE      mandate cap ₹3,000 · attempt ₹4,200        │
 │                       mandate active · 2 prior successes         │
-│ T+0h01  DIAGNOSING    T0 no match → escalate                     │
-│                       ↳ T1 synthesizer  gpt-5.6-terra            │
-│                         cause: mandate_cap_breach   conf 0.88    │
-│                         cites: ev_1102, ev_1104                  │
-│ T+0h01  PLANNING      T1 planner  gpt-5.6-sol                    │
-│                       1. notify_mandate_update  (link)           │
+│ T+0h01  FAN-OUT       diagnosis · context · economics            │
+│                       ↳ diagnosis: mandate_cap_breach 0.88       │
+│                         cites ev_1102, ev_1104                   │
+│                       ↳ economics: 3 eligible actions scored     │
+│ T+0h01  REDUCE        diagnosis accepted; no incident conflict   │
+│ T+0h01  OPTIMIZE      1. notify_mandate_update  (link)           │
 │                       2. wait 48h                                │
 │                       3. retry_within_cap ₹3,000                 │
 │                       stop: paid | opt-out | attempt 3           │
@@ -366,7 +373,7 @@ The decision trail for one case, top to bottom, nothing hidden. This is the scre
 │                       policy v7 · token tk_9d3 · cap ₹3,000      │
 │ T+0h01  EXECUTE       whatsapp template WA_MANDATE_UPD (hi)      │
 │                       budget 1/2 in 7d · quiet hours OK          │
-│ T+2h14  OBSERVE       inbound reply → interpreter (gpt-5.6-luna) │
+│ T+2h14  OBSERVE       inbound reply → context claim              │
 │                       intent: WILL_UPDATE   ← treated as data    │
 │ T+2d01  EXECUTE       pre-debit notification  (RBI, T-24h)       │
 │ T+3d01  EXECUTE       retry ₹3,000  idem 7c2f…  token tk_a41     │
@@ -379,7 +386,7 @@ Note what this screen proves without a word of narration: the tier ladder, evide
 
 **Screen 3 — Incident**
 
-Approval-rate chart with baseline band and the detection point marked; affected segment; parked case count; the staged-release ramp progressing live; the LLM's RCA narrative in a bordered box with its proposed action and the approval state.
+Approval-rate chart with baseline band and the detection point marked; affected segment; parked case count; the staged-release ramp progressing live; the incident-intelligence RCA claim in a bordered box with its provider metadata, proposed action, and approval state.
 
 **Screen 4 — Policy**
 
@@ -395,8 +402,10 @@ A second surface, same SSE event stream, for the "watch it think" moment:
 
 ```
 14:02:11  c_8812  DETECT    upi_autopay MANDATE_AMOUNT_EXCEEDED  ₹4,200
-14:02:11  c_8812  TIER0     no match → escalate
-14:02:12  c_8812  TIER1     synth(gpt-5.6-terra) mandate_cap_breach 0.88
+14:02:11  c_8812  TIER0     no match → fan out specialists
+14:02:12  c_8812  CLAIM     diagnosis mandate_cap_breach 0.88 · ev_1102, ev_1104
+14:02:12  c_8812  REDUCE    accepted diagnosis · no incident conflict
+14:02:12  c_8812  OPTIMIZE  notify_mandate_update EV ₹1,184 · rank 1/3
 14:02:12  c_8812  POLICY    ALLOW R-114 · token tk_9d3 · cap ₹3,000
 14:02:12  c_8812  EXEC      whatsapp WA_MANDATE_UPD hi → +91••••4471
 14:02:13  c_9007  POLICY    BLOCK R-207 quiet_hours (22:41 IST)
@@ -414,13 +423,13 @@ Colour-coded, monospace, scrolling. Cheap to build, and it makes the system feel
 |---|---|---|
 | 0:00–0:30 | **Frame the problem and the honesty.** "Revenue leaks in stages. We built the loop that closes it. The engine is real; the payment world is simulated — which means we know the ground truth and can prove our measurement is accurate. Here's a live Razorpay test-mode case first, so you know the connector is real." | Terminal, idle |
 | 0:30–1:00 | **The one real case.** Trigger it. Real payment link, real payment ID, real webhook closes the case. | Case inspector, live |
-| 1:00–2:00 | **Launch the batch.** 400 cases, 20% holdout, virtual clock running. Let the terminal scroll. Point at one Tier 0 resolve, one OpenAI Tier 1 escalation, and one policy BLOCK on quiet hours. | Terminal |
+| 1:00–2:00 | **Launch the batch.** 400 cases, 20% holdout, virtual clock running. Let the terminal scroll. Point at one Tier 0 resolve, one Tier 1 fan-out/reducer decision, and one policy BLOCK on quiet hours. | Terminal |
 | 2:00–2:45 | **Inject the incident.** Gateway A + HDFC degrades. One incident opens, 47 cases park rather than each retrying and messaging. Show the RCA box. Resolve it; staged release ramps 5→15→40→100 without re-triggering. | Incident screen |
 | 2:45–3:30 | **Open one case fully.** The Screen 2 trail. Say nothing for ten seconds and let them read it. Then point at three lines: the policy rule + version, the capability token, and the verified mandate/pre-debit prerequisite. | Case inspector |
 | 3:30–4:30 | **The number.** Gross versus estimated incremental recovery, its confidence interval, and simulator ground truth. "The honest agent number is ₹2.09 lakh, with this range; the simulator lets us validate the estimator." Then cost per rupee recovered. | Batch run screen |
 | 4:30–5:00 | **Close on the bar.** Stopping rules fired N times, escalations M, every action carries a rule ID and a version, replay reproduces every deterministic decision. Offer to re-run with the same seed. | Policy screen |
 
-**Have ready but off-script:** the adapter interface file, the policy YAML and the LLM-ablation comparison (if anyone challenges the simulation or the use of AI).
+**Have ready but off-script:** the adapter interface file, the policy YAML and the agent-runtime ablation comparison (if anyone challenges the simulation or the use of AI).
 
 ---
 
@@ -430,7 +439,7 @@ Colour-coded, monospace, scrolling. Cheap to build, and it makes the system feel
 |---|---|
 | Scheduler bugs surface only at demo time | Build it in Phase 1 and write property tests: fire-once, cancel-on-terminal, crash-resume |
 | Venue wifi kills the live Razorpay case | Pre-record it; keep the simulated path fully offline |
-| Model latency stalls the batch on stage | Response cache keyed by input hash; degraded-mode fallback; Tier 1 is a minority of cases by design |
+| Provider latency stalls the batch on stage | Structured-claim cache keyed by role and input hash; degraded-mode fallback; Tier 1 is a minority of cases by design |
 | Live adapter promises an unsupported payment action | Restrict RazorpayTestAdapter to a preflighted Payment Link or test Subscription flow; label all other actions simulated |
 | Incident detector fires forty incidents | Child-segment suppression + dwell, tested against the scenario before demo day |
 | Attribution number looks too good | That's the ground-truth line's job — show the error, not just the estimate |

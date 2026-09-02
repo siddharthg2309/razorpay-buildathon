@@ -3,7 +3,7 @@
 **Track:** Razorpay Buildathon, Track 03 — AI Revenue Recovery
 **The bar:** measured money recovered across a batch, with compliant escalation, stopping rules, and an audit trail.
 **Supersedes:** `payment-recovery-agent-concept.md` (v1)
-**Implementation provider:** OpenAI Responses API, with Razorpay Test Mode used only for explicitly supported live actions.
+**LLM implementation:** an `LLMProvider` interface; `OpenAIResponsesProvider` is the first adapter. Razorpay Test Mode is used only for explicitly supported live actions.
 
 ---
 
@@ -11,31 +11,32 @@
 
 | # | v1 | v2 |
 |---|---|---|
-| 3a | ~20 LLM agents; decline-code analysis, fraud scoring, incident correlation all modelled as agents | **5 LLM call sites.** A deterministic Tier 0 resolves ~80% of cases; the model handles the residual, the explanation, and the copy |
-| 3b | Policy gate sits between planner and executor | **Capability tokens.** The gate is the only minter; connectors refuse unsigned calls. Unbypassable by construction |
+| 3a | ~20 loosely defined LLM agents; decline-code analysis, fraud scoring, incident correlation all modelled as agents | **A case blackboard, parallel specialist roles, a claim reducer, and a constrained optimizer.** Tier 0 resolves ~80% of cases; only ambiguous work invokes an LLM provider |
+| 3b | Policy gate sits between plan selection and executor | **Capability tokens.** The gate is the only minter; connectors refuse unsigned calls. Unbypassable by construction |
 | 3c | No scheduler anywhere in the design | **Durable scheduler (L2)** is a first-class component — leased, idempotent, cancellable, virtual-clock aware |
 | 3d | "idempotency" and "coordinate" asserted | **Obligation lease + idempotency keys + contact-budget ledger + incident attachment**, all specified |
 | 3e | Incident parks cases, resumption unspecified | **Release controller** with ramp, jitter, and circuit breaker; reroute gets canary + auto-rollback + TTL |
 | 3f | "Rolling windows vs baseline" | **Seasonal per-segment baselines**, volume floor, two-proportion z-test, dwell, BH correction, auto-close, child-segment suppression |
 | §4 | Global card vocabulary; Razorpay unmentioned | **India rails first-class**: UPI AutoPay, e-NACH, RBI e-mandate, AFA, pre-debit notification, DLT/TRAI, WhatsApp windows, Razorpay APIs |
 | §5 | Attribution is one paragraph | **Attribution service** with stratified holdout and an incremental-recovery estimator as the headline metric |
-| §4 implementation | Anthropic-specific SDK, model names and cache controls | **OpenAI Responses API**, strict Structured Outputs, provider-neutral model configuration and OpenAI prompt-cache telemetry |
+| §4 implementation | Anthropic-specific SDK, model names and cache controls | **Provider-neutral agent runtime** with strict structured claims; OpenAI Responses API is the initial provider adapter |
 
 ---
 
 ## 1. Design principles
 
-1. **Thin agent, thick policy.** The model earns its place where judgement is genuinely required. Everything a lookup table can answer is a lookup table — deterministic, cheap, and reproducible in the audit trail.
-2. **Parallel proposal, serial execution.** Many components may investigate and propose concurrently; exactly one policy-approved plan executes against an obligation.
-3. **Money moves only through a minted capability.** Not "the planner checked" — the connector physically cannot act without a signed, single-use token.
-4. **Time is a first-class dependency.** Everything is scheduled: retries, chases, escalations, parks. The scheduler is infrastructure, not an afterthought.
-5. **A rupee is only recovered when it is both collected and attributable.** Gross recovery is reported; incremental recovery against a holdout is the headline.
+1. **Thin agents, thick policy.** An agent owns a narrow question, scoped evidence, permitted tools, and a typed claim contract. A model is optional implementation detail inside that role. Everything a lookup table can answer stays deterministic, cheap, and replayable.
+2. **Shared facts, not chained prompts.** Agents read and write versioned claims on a case blackboard. They do not pass an unbounded conversation from one agent to another.
+3. **Parallel proposal, serial execution.** Independent specialists investigate concurrently and fan in through a reducer; exactly one policy-approved plan executes against an obligation.
+4. **Money moves only through a minted capability.** Not "an agent said so" — the connector physically cannot act without a signed, single-use token.
+5. **Time is a first-class dependency.** Everything is scheduled: retries, chases, escalations, parks. The scheduler is infrastructure, not an afterthought.
+6. **A rupee is only recovered when it is both collected and attributable.** Gross recovery is reported; incremental recovery against a holdout is the headline.
 
 ---
 
 ## 2. Layered architecture
 
-Not an "agent mesh" — a layered pipeline where one layer's output is another's input, and each layer has a single responsibility.
+This is a case-driven multi-agent system, not an autonomous swarm. The case fabric controls lifecycle and side effects; the agent runtime provides bounded parallel deliberation over a shared blackboard.
 
 ```mermaid
 flowchart TB
@@ -52,23 +53,27 @@ flowchart TB
 
     subgraph L2["L2 — Case fabric"]
         CR["Case router<br/>+ obligation dedup"]
+        ER["Deterministic event reducer<br/>events → case revision"]
         SM["Case state machine"]
         SCH["Durable scheduler"]
         LK["Obligation leases"]
     end
 
-    subgraph L3["L3 — Evidence"]
+    subgraph L3["L3 — Shared case blackboard"]
         EB["Evidence board<br/>typed, versioned"]
+        CB["Claim board<br/>cited, versioned, expiring"]
         FB["Feature builders<br/>tool-gated retrieval"]
     end
 
-    subgraph L4["L4 — Reason"]
+    subgraph L4["L4 — Agent runtime"]
+        WR["Work router<br/>select agents by event"]
         T0["Tier 0: deterministic classifier"]
-        T1["Tier 1: OpenAI synthesizer + planner"]
-        T2["Tier 2: human queue"]
+        SA["Parallel specialists<br/>diagnosis · context · incident · economics · communication"]
+        DR["Deliberation reducer<br/>claims → strategy"]
     end
 
-    subgraph L5["L5 — Govern"]
+    subgraph L5["L5 — Optimize and govern"]
+        CO["Constrained optimizer<br/>rank permitted plans"]
         PE["Policy engine (rules, versioned)"]
         CT["Capability token minter"]
         BL["Budget ledgers<br/>contact / spend / retry"]
@@ -88,38 +93,55 @@ flowchart TB
     end
 
     L0 --> L1 --> L2 --> L3 --> L4 --> L5 --> L6 --> L7
+    SA -.->|"typed claims"| CB
+    T0 --> DR
+    SA --> DR --> CO
     L7 -.->|"state transition"| L2
     L7 --> AL
     CX --> SIM
     CX --> RZP
 ```
 
-**The dotted edge matters.** L7 writes the next state back to L2, which schedules the next action. That loop — not a chain of agents — is the product.
+**The loop matters.** L7 writes an outcome event back to L2. The deterministic event reducer creates a new case revision, invalidates only stale claims, and the work router reruns only the specialists affected by that event. It is reactive, rather than a one-shot plan.
 
 ---
 
 ## 2a. Executable workflows
 
-The product is agentic in **reasoning**, but not in uncontrolled execution. A model can rank hypotheses and propose an action from the action library. The policy engine and connector decide whether anything external happens.
+The product is agentic in **bounded deliberation**, but not in uncontrolled execution. Specialists may run in parallel; the reducer and optimizer select one strategy; the policy engine and connector decide whether anything external happens.
 
 ```mermaid
 sequenceDiagram
     participant S as Razorpay / client / timer
     participant I as Ingest + dedup
     participant C as Case fabric
-    participant E as Evidence + decision ladder
+    participant B as Case blackboard
+    participant D as Diagnosis agent
+    participant X as Context agent
+    participant A as Incident/economics agents
+    participant R as Claim reducer + optimizer
     participant P as Policy + capability gate
-    participant X as Connector / simulator
+    participant K as Connector / simulator
     participant V as Verifier + ledger
 
     S->>I: signed webhook, checkout event, or due timer
     I->>C: normalize, deduplicate, lock obligation
-    C->>E: scoped evidence package
-    E->>E: Tier 0 resolve or OpenAI reason
-    E->>P: proposed known action + stop conditions
+    C->>B: reduce event and open case revision
+    par independent investigation
+        B->>D: classify cause and confidence
+    and
+        B->>X: retrieve obligation and customer context
+    and
+        B->>A: correlate incident and score candidates
+    end
+    D-->>B: cited claim
+    X-->>B: cited claim
+    A-->>B: cited claims
+    B->>R: current claims + permitted action library
+    R->>P: ranked known plan + stop conditions
     alt allowed and supported by selected connector
-        P->>X: single-use capability + idempotency key
-        X->>V: status, webhook, or simulated outcome
+        P->>K: single-use capability + idempotency key
+        K->>V: status, webhook, or simulated outcome
     else blocked, unsupported, or uncertain
         P->>V: rule-backed block or human escalation
     end
@@ -134,7 +156,7 @@ flowchart LR
     A[Payment events + Razorpay downtime signal] --> B[Segmented anomaly detector]
     B -->|meaningful deviation| C[Incident]
     C --> D[Attach and suppress related cases]
-    C --> E[OpenAI RCA narrative + proposed supported action]
+    C --> E[Incident intelligence agent: RCA narrative + supported proposal]
     E --> F[Policy / human approval]
     F --> G[Simulated canary or supported operational action]
     G --> H[Monitor approval rate]
@@ -142,9 +164,9 @@ flowchart LR
     H -->|unhealthy| D
 ```
 
-## 2b. Agent architecture at a glance
+## 2b. Agent runtime: parallel specialists, reducer, and optimizer
 
-The “agents” are governed specialist roles that share the same case record. They do not hand work to one another through an open-ended chat, and the OpenAI layer never receives a credential that can move money or contact a customer directly.
+The “agents” are specialist roles with separate tool scopes and output schemas. They share the same versioned case blackboard; they do not hand work to one another through an open-ended chat.
 
 ```mermaid
 flowchart TB
@@ -155,18 +177,22 @@ flowchart TB
         ANOM["Anomaly and downtime detector"]
     end
 
-    RZPW & APP & TIMER --> ING["L0 — Ingest<br/>verify, normalize, deduplicate"]
-    ING --> CASE["L2 — Case fabric<br/>state, evidence timeline, idempotency, budgets"]
+    RZPW & APP & TIMER --> ING["Ingest<br/>verify, normalize, deduplicate"]
+    ING --> CASE["Case manager + event reducer<br/>new case revision"]
     ANOM --> INC["Incident case<br/>scope and suppress related cases"]
     INC --> CASE
 
-    CASE --> EVID["Evidence builder<br/>payment state, history, risk, prior attempts"]
-    EVID --> ROUTE{"Known deterministic<br/>cause?"}
-    ROUTE -->|yes| T0["Tier 0 playbook<br/>deterministic recovery"]
-    ROUTE -->|no or ambiguous| T1["Tier 1 — OpenAI<br/>diagnose, plan, compose"]
+    CASE --> BB["Case blackboard<br/>evidence, constraints, prior claims"]
+    BB --> DIA["Payment diagnosis agent"]
+    BB --> CXT["Customer/context agent"]
+    BB --> INA["Incident-intelligence agent"]
+    BB --> ECO["Recovery-economics agent"]
+    BB --> PRE["Deterministic policy snapshot"]
 
-    T0 --> GOV["Policy and capability governor<br/>consent, quiet hours, mandates,<br/>attempt caps, budgets, permissions"]
-    T1 --> GOV
+    DIA & CXT & INA & ECO & PRE --> CLAIMS["Claim board<br/>typed, cited agent outputs"]
+    CLAIMS --> RED["Deliberation reducer<br/>resolve conflicts → strategy"]
+    RED --> OPT["Constrained optimizer<br/>rank by incremental value"]
+    OPT --> GOV["Final policy and capability governor<br/>consent, quiet hours, mandates,<br/>attempt caps, budgets, permissions"]
     GOV -->|allowed and supported| EXEC["Capability executor"]
     GOV -->|blocked or uncertain| HUMAN["Human escalation or safe stop"]
 
@@ -177,22 +203,18 @@ flowchart TB
     VERIFY --> DASH["Operations dashboard<br/>case drilldown and batch recovery"]
 ```
 
-### The per-case specialist workflow
+There are two different reducers:
 
-```mermaid
-flowchart LR
-    CASE["Scoped case evidence"] --> DIAG["1. Diagnosis agent<br/>classify cause and confidence"]
-    DIAG --> PLAN["2. Recovery planner<br/>select next-best known action"]
-    PLAN --> COPY["3. Message composer<br/>fill approved template slots"]
-    COPY --> CHECK["4. Policy agent<br/>validate constraints"]
-    CHECK -->|approved| ACT["5. Executor<br/>invoke bounded capability"]
-    CHECK -->|not approved| ESC["Escalate or stop safely"]
-    ACT --> OBS["6. Verifier<br/>observe provider outcome"]
-    OBS --> LEDGER["Ledger and metrics<br/>recovery, cost, confidence"]
-    LEDGER --> CASE
-```
+1. **Event reducer (deterministic):** reduces the ordered event log into the current `CaseState`. It makes replay and selective re-evaluation possible.
+2. **Deliberation reducer (structured):** combines parallel agent claims, detects conflicts and missing evidence, and chooses a strategy. It uses deterministic rules for clear cases and may call an LLM provider only for genuine ambiguity.
 
-**Safety boundary:** OpenAI can recommend a known action and draft approved copy. It cannot mint a capability token, bypass policy, invoke a connector, or declare a payment recovered. Those decisions remain deterministic, logged, and independently verified.
+The optimizer then maximizes:
+
+`expected incremental recovery − action cost − model cost − customer/risk penalty`
+
+subject to hard policy constraints. The optimizer cannot select a novel action: it ranks only action-library candidates proposed by specialists and permitted by the policy snapshot.
+
+**Safety boundary:** The LLM provider can help an agent interpret evidence, resolve conflicting claims, or draft approved copy. It cannot mint a capability token, bypass policy, invoke a connector, or declare a payment recovered. Those decisions remain deterministic, logged, and independently verified.
 
 ---
 
@@ -203,14 +225,14 @@ Every case enters at Tier 0 and escalates only if it must.
 | Tier | Handles | Mechanism | Expected share | LLM cost |
 |---|---|---|---|---|
 | **Tier 0 — Resolve** | Known failure code, known rail, unambiguous policy | Decline taxonomy lookup → playbook → plan | ~75–85% | zero |
-| **Tier 1 — Reason** | Unmapped code, conflicting evidence, multiple viable plans, customer reply to interpret | LLM synthesizer + planner + composer | ~12–20% | 1–3 calls |
+| **Tier 1 — Deliberate** | Unmapped code, conflicting evidence, multiple viable plans, customer reply to interpret | Fan out specialist work → reduce typed claims → optimize a known action library | ~12–20% | 0–4 calls |
 | **Tier 2 — Escalate** | Low confidence, high value, novel action, policy requires approval | Human queue with expiry | ~3–5% | zero |
 
 ### Why this is the stronger AI story
 
-The obvious question from a judge is *"why does this need an LLM at all?"* The ladder answers it with a number: the audit ledger records the tier for every case, so the demo can state **"the model changed the outcome on N of this batch's cases — here are three of them"**, rather than asserting intelligence.
+The obvious question from a judge is *"why does this need agents at all?"* The answer is that a recovery case combines independent payment, customer, incident, economics, and compliance evidence. The ledger records each specialist's claims, the reducer's conflict resolution, and the optimizer's rejected alternatives, so the demo can state **"parallel investigation changed the outcome on N cases — here are three replays"**, rather than asserting intelligence.
 
-It also makes the audit trail reproducible. A Tier 0 decision cites a rule ID; replaying the ledger yields the identical plan. Only Tier 1 decisions carry model non-determinism, and those are the minority.
+It also makes the audit trail reproducible. A Tier 0 decision cites a rule ID; replaying the ledger yields the identical plan. Tier 1 records the exact claims, model/provider metadata when used, reducer input, and optimizer score so its non-deterministic portion is inspectable and cacheable.
 
 ### What is deterministic (no model)
 
@@ -219,43 +241,44 @@ It also makes the audit trail reproducible. A Tier 0 decision cites a rule ID; r
 | Decline-code → cause + retry eligibility | Taxonomy table, per rail |
 | Retry schedule | Rule: `(rail, code, attempt_no) → delay` |
 | Fraud / risk gate | Threshold on the score you already have |
-| Incident correlation | Graph query on the incident index |
-| Recovery economics (EV) | `p_recover × value − action_cost − agent_cost` |
+| Incident correlation | Segment/issuer/rail graph query on the incident index |
+| Candidate generation and recovery economics | Action library + `p_recover × value − action_cost − model_cost − risk_penalty` |
 | Policy evaluation | Rules engine over case + customer + merchant config |
 | Attribution | Two-proportion statistics |
 | Contact eligibility | Budget ledger + consent + quiet-hours check |
 
 ---
 
-## 4. The five OpenAI call sites
+## 4. Agent runtime and LLM provider adapter
 
-Every model call uses the OpenAI Node SDK and the Responses API. It returns a strict JSON Schema through `text.format`; it has a bounded, redacted input; and it has no connector, policy-minting, or money-moving tool access.
+An **agent** is defined by its job, tool scope, evidence scope, claim schema, timeout, cost budget, and evaluation—not by the model vendor. The runtime invokes an LLM only when that agent cannot close its question deterministically.
 
-| # | Call site | Fires when | Default model | Effort | Output |
-|---|---|---|---|---|---|
-| 1 | **Diagnosis synthesizer** | Tier 0 confidence is below threshold, or evidence conflicts | `gpt-5.6-terra` | `medium` | Ranked hypotheses, confidence, cited evidence IDs |
-| 2 | **Recovery planner** | More than one eligible plan, or no playbook match | `gpt-5.6-sol` | `high` | Ordered *known* action IDs, parameters, and stop conditions |
-| 3 | **Message composer** | An approved customer-facing template needs language/slot values | `gpt-5.6-luna` | `none` or `low` | Template slot values only; no recipient or link changes |
-| 4 | **Incident RCA narrator** | An incident opens | `gpt-5.6-terra` | `high` | Root-cause narrative plus supported proposed action |
-| 5 | **Reply interpreter** | An inbound customer message arrives | `gpt-5.6-luna` | `none` | Intent enum and extracted fields only |
+| Specialist | Primary responsibility | Deterministic first path | Optional LLM work | Claim output |
+|---|---|---|---|---|
+| **Payment diagnosis** | Explain why collection failed | Rail/code taxonomy | Reconcile conflicting or unmapped evidence | ranked causes + confidence + evidence refs |
+| **Customer/context** | Establish obligation, history, and intent | feature retrieval and policy facts | interpret an inbound reply | context facts or intent enum |
+| **Incident intelligence** | Detect shared failure and protect cases | segmented graph/baseline query | RCA narrative for an opened incident | incident/suppression recommendation |
+| **Recovery economics** | Generate and value viable actions | action library + expected-value scoring | none in P1 | candidates + score components |
+| **Communication** | Render allowed customer copy | approved template selection | fill allowed slots only | template slots or safe reply class |
+| **Deliberation reducer** | Turn claims into a strategy | precedence, confidence, and conflict rules | resolve material conflict only | selected strategy + rejected alternatives |
 
-Model IDs are configuration, not business logic. A startup capability check may select approved substitutes, but the ledger always records the actual model and reasoning effort used.
+`OpenAIResponsesProvider` is the initial implementation of `LLMProvider`. It uses the OpenAI Node SDK and Responses API with strict JSON Schema. Model IDs (for example, Terra for analysis and Luna for short structured extraction) remain configuration, not architecture; the ledger records the actual provider, model, effort, latency, and usage for every invocation.
 
-### OpenAI request contract
+### Provider request contract
 
-- Use `openai.responses.create()` with `text.format: { type: "json_schema", ... }`; reject any response that fails schema validation.
+- The OpenAI adapter uses `openai.responses.create()` with `text.format: { type: "json_schema", ... }`; reject any response that fails schema validation.
 - Keep stable instructions, the sorted action library, policy summary, and decline taxonomy first. Put case-specific evidence last.
-- Use a stable `prompt_cache_key` per call site and record OpenAI cached-token and cache-write telemetry in the ledger.
+- Use a stable `prompt_cache_key` per specialist role and record provider cache telemetry in the ledger.
 - Keep the LLM stateless per case unless a bounded follow-up genuinely needs its prior response. Case state lives in the database and evidence board, not in chat history.
 - Store response ID, model, schema version, latency, usage, and validation result. Store prompt hashes and redacted inputs, not raw PII.
 
 ### Prompt-injection posture
 
-Call sites 3 and 5 touch untrusted text — inbound emails, WhatsApp replies, promise-to-pay messages. The rules:
+The customer/context and communication roles may touch untrusted text — inbound emails, WhatsApp replies, promise-to-pay messages. The rules:
 
 - Inbound customer content is **data, never instruction**. It cannot lift a retry cap, unlock an action, change a policy, or alter the plan.
-- Site 5 returns an **enum plus extracted fields**. It has no tool access and cannot emit an action. Its output is fed into the deterministic policy engine, which decides what happens.
-- Site 3 fills **slots in an approved template**. It cannot author a free-form message, add a link, or change the recipient.
+- The reply-interpreter claim returns an **enum plus extracted fields**. It has no tool access and cannot emit an action. Its output is fed into the deterministic policy engine, which decides what happens.
+- The communication claim fills **slots in an approved template**. It cannot author a free-form message, add a link, or change the recipient.
 - Webhook signatures are verified at L0. A spoofed `payment_failed` is otherwise a free way to make the agent contact arbitrary customers.
 
 ### Degraded mode
@@ -266,7 +289,7 @@ If the model is unavailable or rate-limited, the case uses Tier 0 **only when an
 
 ## 5. Governance: capability tokens (fix 3b)
 
-A gate that only sits between the planner and the executor is advisory — anything holding a connector can route around it. So the gate is moved into the connector's admission check.
+A gate that only sits between the reducer/optimizer and the executor is advisory — anything holding a connector can route around it. So the gate is moved into the connector's admission check.
 
 **The policy engine is the only minter.** Deterministic code, never a prompt.
 
@@ -438,7 +461,7 @@ The bar says **measured** money recovered. This is the component that produces t
 - **Exclusions**: payments recovered by the merchant's own existing dunning, and self-service customer retries occurring before first agent contact.
 - **Normalisation**: a recovered renewal counts once as cash collected. It is *not* also counted as retained MRR in the headline; MRR is a breakdown, not an addend.
 - **Uncertainty**: show a 95% confidence interval for recovery-rate lift and a bootstrap interval for incremental recovered rupees.
-- **LLM ablation**: run the same seeded scenario with Tier 1 enabled and with Tier 0 fallback to measure the incremental contribution of model reasoning.
+- **Agent-runtime ablation**: run the same seeded scenario with parallel specialist claims enabled and with the Tier 0 fallback to measure the incremental contribution of deliberation. Separately report provider spend and model-call rate.
 - **Reporting**: show gross and incremental side by side, clearly labelled. Simulator ground truth is validation-only and is never presented as production-observable.
 
 Metrics beyond the headline: recovery rate by cause / rail / issuer, approval-rate delta after an incident action, time to recovery, cost per rupee recovered (including model spend), contact volume per recovered rupee.
@@ -499,10 +522,18 @@ obligations(id, merchant_id, customer_id, type, amount, currency,
             due_at, external_ref, state)
 cases(id, obligation_id, incident_id?, domain, state, tier,
       holdout_flag, opened_at, closed_at, terminal_reason)
+case_events(id, case_id, seq, type, payload_json, source, occurred_at,
+            UNIQUE(case_id, seq))
+case_revisions(case_id, revision, state_json, reduced_through_seq, created_at)
 evidence(id, case_id, kind, payload_json, source, observed_at)
+agent_runs(id, case_id, revision, role, status, input_hash, provider?,
+           model?, latency_ms?, cost?, started_at, completed_at)
+claims(id, case_id, revision, agent_run_id, role, status, confidence,
+       payload_json, evidence_refs[], invalidated_at)
 diagnoses(id, case_id, cause_code, confidence, tier, rule_id?,
           model_id?, evidence_refs[])
-plans(id, case_id, version, actions_json, stop_conditions_json, chosen_by)
+plans(id, case_id, version, actions_json, stop_conditions_json, chosen_by,
+      reducer_trace_json, optimizer_scores_json)
 capability_tokens(id, case_id, action_id, params_hash, amount_cap,
                   policy_version, rule_id, not_after, burned_at)
 action_attempts(id, case_id, action_id, attempt_no, idem_key UNIQUE,
@@ -517,7 +548,7 @@ attribution_runs(id, batch_id, treated_n, holdout_n, treated_rate,
                  holdout_rate, incremental_amount, window_days)
 ```
 
-`ledger` is append-only and is the replay source. Replaying it must reproduce every Tier 0 decision exactly.
+`case_events` is the authoritative ordered input; `case_revisions` is the output of the deterministic event reducer. `ledger` records every decision and side effect. Replaying the event log must reproduce every Tier 0 decision exactly and reproduce the inputs, claims, and scores used for each Tier 1 decision.
 
 ---
 
@@ -533,4 +564,4 @@ attribution_runs(id, batch_id, treated_n, holdout_n, treated_rate,
 
 ## 14. Product narrative
 
-> When revenue is at risk, the agent detects it, diagnoses it against the actual rail — card, UPI AutoPay, or e-NACH — chooses an intervention its policy engine will authorise, executes it through a token-gated connector, and verifies whether money actually arrived. It respects retry ceilings, RBI mandate rules, DLT templates, consent, and quiet hours. And it reports what it recovered against a randomised holdout, so the number on the screen is the money the agent caused — not the money that would have arrived anyway.
+> When revenue is at risk, the recovery agent system opens a case and lets payment, customer, incident, and economics specialists investigate it in parallel. Their cited claims are reduced into one strategy, ranked by constrained expected value, authorised by policy, executed through a token-gated connector, and verified against money actually received. It respects retry ceilings, RBI mandate rules, DLT templates, consent, and quiet hours. And it reports what it recovered against a randomised holdout, so the number on the screen is the money the system caused — not the money that would have arrived anyway.
