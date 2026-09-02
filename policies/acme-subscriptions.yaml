@@ -1,0 +1,41 @@
+# Versioned merchant policy.
+#
+# Regulatory constraints live here as config, not code, because they differ per
+# merchant and change over time — and the ledger records which version
+# authorised each action.
+
+version: v7
+merchant: acme-subscriptions
+
+# RBI recovery conduct: contact hours. Evaluated in the merchant's timezone,
+# never the server's.
+quiet_hours:
+  start: "21:00"
+  end: "09:00"
+  timezone: Asia/Kolkata
+
+# TRAI/DLT and WhatsApp Business limits. The "*" cap is global across channels:
+# three separate per-channel caps still let a customer be contacted ten times.
+contact_caps:
+  - { channel: sms,      window_days: 7, max: 2 }
+  - { channel: whatsapp, window_days: 7, max: 3 }
+  - { channel: email,    window_days: 7, max: 5 }
+  - { channel: "*",      window_days: 7, max: 6 }
+
+retry_caps:
+  max_attempts_per_case: 4
+
+amount_thresholds:
+  # Above this, a human approves before anything executes.
+  require_approval_above_paise: 1000000
+
+# Per-rail allow-list. An action absent here is blocked even if the library
+# defines it and the connector supports it.
+allowed_actions:
+  card:         [create_payment_link, request_payment_method_update, send_approved_template, create_ops_escalation, wait, resume_checkout]
+  upi_collect:  [create_payment_link, send_approved_template, create_ops_escalation, wait, resume_checkout]
+  upi_autopay:  [request_payment_method_update, send_approved_template, create_ops_escalation, wait, await_provider_retry, await_mandate_prerequisite]
+  enach:        [request_payment_method_update, send_approved_template, create_ops_escalation, wait, await_provider_retry, await_mandate_prerequisite]
+  netbanking:   [create_payment_link, send_approved_template, create_ops_escalation, wait, resume_checkout]
+  wallet:       [create_payment_link, send_approved_template, create_ops_escalation, wait]
+  smart_collect: [create_ops_escalation, wait]

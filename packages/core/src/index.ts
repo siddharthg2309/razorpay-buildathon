@@ -6,4 +6,6 @@ export * from "./actions.js";
 export * from "./taxonomy.js";
 export * from "./playbooks.js";
 export * from "./roles.js";
+export * from "./policy.js";
+export * from "./capability.js";
 export * from "./config.js";
