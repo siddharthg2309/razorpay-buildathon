@@ -29,10 +29,17 @@ npm test
 ## Layout
 
 ```
-/packages/core     types, Clock, case state machine, event reducer, action library
+/packages/core     types, Clock, state machine, event reducer, taxonomy,
+                   playbooks, roles, policy, capability tokens
 /packages/db       pool, migration runner, ledger, case event store
+/packages/engine   scheduler, leases, blackboard, work router, Tier 0,
+                   policy engine, executor, reconciler, verifier
+/packages/connectors  PSPAdapter, SimulatedPSP, RazorpayTestAdapter
 /migrations        numbered SQL, applied in order
 /actions           the action library
+/taxonomy          decline codes per rail
+/playbooks         (domain, cause) -> default plan
+/policies          versioned merchant policy
 /scripts           lint-clock.ts — fails on wall-clock reads outside Clock
 /tests             vitest
 ```
@@ -49,8 +56,31 @@ npm test
 | A rejected event leaves no trace — the whole append rolls back | `tests/db.test.ts` |
 | Forbidden actions (`charge_retry`, `update_routing`, `send_message`) fail at load with a reason | `tests/action-library.test.ts` |
 | Only `create_payment_link` and `fetch_payment_status` are marked live | `tests/action-library.test.ts` |
+| A scheduled action fires exactly once, only after its virtual due time | `tests/scheduler.test.ts` |
+| Concurrent tick workers split the due set rather than double-leasing | `tests/scheduler.test.ts` |
+| A terminal transition cancels the rest of the dunning sequence atomically | `tests/scheduler.test.ts` |
+| A revoked mandate never yields a retry; pre-debit is ordered before debit | `tests/tier0.test.ts` |
+| An inbound reply reruns only context and communication | `tests/work-router.test.ts` |
+| No role has a connector in its tool scope | `tests/work-router.test.ts` |
+| Quiet hours are evaluated in the merchant timezone, wrapping midnight | `tests/policy.test.ts` |
+| A blocked action never spends contact budget | `tests/policy.test.ts` |
+| A replayed capability token is refused; concurrent double-spend has one winner | `tests/policy.test.ts` |
+| A crash mid-call reconciles against the PSP rather than re-issuing | `tests/executor.test.ts` |
+| An unsupported capability is refused before execution, token unburned | `tests/executor.test.ts` |
+| RECOVERED requires matched money, not a successful connector call | `tests/verifier.test.ts` |
 | No `now()` / `CURRENT_TIMESTAMP` / `Date.now()` outside `Clock` | `npm run lint:clock` |
 
 ## Status
 
-Phase 0 (foundations) complete. Phase 1 (case fabric + durable scheduler) next.
+| Phase | State |
+|---|---|
+| 0 — Foundations | done |
+| 1 — Case fabric + scheduler | done |
+| 2 — Blackboard, Tier 0, work router | done |
+| 3 — Policy engine + capability tokens | done |
+| 4 — Connectors + executor | done |
+| 5 — Verifier + reconciler | done |
+| 6 — Agent runtime + provider adapter | next |
+| 7–11 | pending |
+
+126 tests.

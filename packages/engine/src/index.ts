@@ -7,3 +7,5 @@ export * from "./tier0.js";
 export * from "./policy-engine.js";
 export * from "./token-burn.js";
 export * from "./executor.js";
+export * from "./reconciler.js";
+export * from "./verifier.js";
