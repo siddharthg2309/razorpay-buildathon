@@ -2,8 +2,12 @@
   "name": "revenue-recovery-agent",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*"],
-  "engines": { "node": ">=22" },
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
@@ -22,6 +26,7 @@
     "vitest": "^2.1.8"
   },
   "dependencies": {
+    "openai": "^4.104.0",
     "pg": "^8.13.1",
     "yaml": "^2.6.1"
   }

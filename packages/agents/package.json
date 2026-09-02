@@ -1,0 +1,9 @@
+{
+  "name": "@rra/agents",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@rra/core": "*", "@rra/db": "*", "@rra/engine": "*", "openai": "^4.77.0" }
+}

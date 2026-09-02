@@ -35,6 +35,8 @@ npm test
 /packages/engine   scheduler, leases, blackboard, work router, Tier 0,
                    policy engine, executor, reconciler, verifier
 /packages/connectors  PSPAdapter, SimulatedPSP, RazorpayTestAdapter
+/packages/agents   LLMProvider, OpenAI adapter, specialists, deliberation
+                   reducer, constrained optimizer, agent runtime
 /migrations        numbered SQL, applied in order
 /actions           the action library
 /taxonomy          decline codes per rail
@@ -68,6 +70,13 @@ npm test
 | A crash mid-call reconciles against the PSP rather than re-issuing | `tests/executor.test.ts` |
 | An unsupported capability is refused before execution, token unburned | `tests/executor.test.ts` |
 | RECOVERED requires matched money, not a successful connector call | `tests/verifier.test.ts` |
+| A known decline code never reaches a provider | `tests/agents.test.ts` |
+| PII is stripped before any provider call | `tests/agents.test.ts` |
+| A role whose contract forbids a provider never receives one | `tests/agents.test.ts` |
+| One failing specialist does not discard the others' claims | `tests/agents.test.ts` |
+| The reducer spends a provider call only on a material conflict | `tests/agents.test.ts` |
+| A provider outage escalates rather than inventing a plan | `tests/agents.test.ts` |
+| The optimizer cannot select an action outside the library | `tests/agents.test.ts` |
 | No `now()` / `CURRENT_TIMESTAMP` / `Date.now()` outside `Clock` | `npm run lint:clock` |
 
 ## Status
@@ -80,7 +89,8 @@ npm test
 | 3 — Policy engine + capability tokens | done |
 | 4 — Connectors + executor | done |
 | 5 — Verifier + reconciler | done |
-| 6 — Agent runtime + provider adapter | next |
-| 7–11 | pending |
+| 6 — Agent runtime + provider adapter | done |
+| 7 — Incident mode | next |
+| 8–11 | pending |
 
-126 tests.
+151 tests.
