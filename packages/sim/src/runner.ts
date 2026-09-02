@@ -6,8 +6,9 @@ import {
 import { CaseEventStore, Ledger, getPool } from "@rra/db";
 import { SimulatedPSP, type LatentCustomer } from "@rra/connectors";
 import {
-  Blackboard, CaseManager, Executor, ObligationLease, PolicyEngine, Reconciler,
-  Scheduler, Tier0Resolver, TokenBurner, Verifier, WorkRouter,
+  AnomalyDetector, Blackboard, CaseManager, Executor, IncidentManager, ObligationLease,
+  PolicyEngine, Reconciler, ReleaseController, Scheduler, Tier0Resolver, TokenBurner,
+  Verifier, WorkRouter, segmentLabel, type SegmentKey, type SegmentObservation,
 } from "@rra/engine";
 import {
   AgentRuntime, ConstrainedOptimizer, DeliberationReducer, valueActions,
@@ -42,6 +43,8 @@ export interface BatchReport {
   actionsExecuted: number;
   stepErrors: number;
   degradedEscalations: number;
+  incidentsOpened: number;
+  casesParked: number;
   errorSamples: string[];
   policyBlocks: Record<string, number>;
   terminalStates: Record<string, number>;
@@ -103,11 +106,22 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
   const tier0 = new Tier0Resolver(config.taxonomy, config.playbooks);
   const router = new WorkRouter(blackboard);
   const runtime = new AgentRuntime(blackboard, config.library, config.taxonomy, clock, opts.provider ?? null);
+  const detector = new AnomalyDetector(clock);
+  const incidents = new IncidentManager(clock);
+  const release = new ReleaseController(incidents, clock, undefined, scenario.seed);
   const reducer = new DeliberationReducer(opts.provider ?? null);
   const optimizer = new ConstrainedOptimizer(config.library);
 
   const byId = new Map(cohort.map((c) => [c.caseId, c]));
   const recoveredAt = new Map<string, number>();
+  /**
+   * Every case that has reached a terminal state, for any reason.
+   *
+   * Recovery is not the only way a case closes — a customer can opt out or
+   * dispute at any point, including while parked in an incident — and acting on
+   * a closed case is an illegal transition the state machine rejects outright.
+   */
+  const closed = new Set<string>();
   /**
    * Conversions do not settle instantly.
    *
@@ -125,8 +139,44 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
   const attemptNos = new Map<string, number>();
   const stats = {
     tier0: 0, tier1: 0, providerCalls: 0, executed: 0, planned: 0,
-    stepErrors: 0, degraded: 0, errorSamples: [] as string[],
+    stepErrors: 0, degraded: 0, incidentsOpened: 0, casesParked: 0,
+    errorSamples: [] as string[],
   };
+
+  /**
+   * Per-segment attempt outcomes for the detector.
+   *
+   * `window` is this tick; `baseline` accumulates everything seen before the
+   * current window, standing in for the seasonal per-segment baseline the
+   * architecture specifies. The batch runs 14 virtual days from a cold start,
+   * so there is no trailing four weeks to draw on.
+   */
+  const windowCounts = new Map<string, { attempts: number; approvals: number }>();
+  const baselineCounts = new Map<string, { attempts: number; approvals: number }>();
+  const segmentsOf = (sc: SyntheticCase): SegmentKey[] => [
+    { gateway: sc.gateway },
+    { gateway: sc.gateway, issuer: sc.issuer },
+  ];
+  const bump = (m: Map<string, { attempts: number; approvals: number }>, label: string, ok: boolean) => {
+    const row = m.get(label) ?? { attempts: 0, approvals: 0 };
+    row.attempts++;
+    if (ok) row.approvals++;
+    m.set(label, row);
+  };
+  const openIncidents = new Map<string, { id: string; segment: SegmentKey }>();
+  /**
+   * Ticks per detector window.
+   *
+   * A one-hour window is too thin for a finer segment to clear the n>=30 floor,
+   * so only the coarse aggregate ever gets tested and the incident always opens
+   * at gateway level — parking every case on the gateway when one issuer is the
+   * problem. Widening the window is the fix; lowering the floor would just
+   * trade a false negative for a false positive.
+   */
+  const TICKS_PER_WINDOW = 2;
+  let ticksInWindow = 0;
+  /** Which cases each incident parked, so release resumes exactly those. */
+  const members = new Map<string, Set<string>>();
 
   await seedMerchant(scenario.merchant, cohort);
 
@@ -150,7 +200,10 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
     // The holdout arm is observed, never acted on. That is what it is for.
     if (holdout) continue;
 
-    await plan(sc);
+    // Failures arrive over hours, not in one instant. Staggering matters for
+    // more than realism: an injected degradation has to land on live traffic
+    // to be detectable at all.
+    await plan(sc, (i % 6) * HOUR);
     if (i % 200 === 0) opts.onProgress?.(Math.round((i / cohort.length) * 50));
   }
 
@@ -164,18 +217,25 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
     // What the world does on its own — including in the holdout arm.
     for (const ev of world.drainUntil(elapsed)) {
       const sc = byId.get(ev.caseId);
-      if (!sc || recoveredAt.has(ev.caseId)) continue;
+      if (!sc) continue;
+      if (closed.has(ev.caseId)) continue;
       if (ev.kind === "natural_payment") {
         const out = await verifier.onSettlement({
           id: `set_nat_${ev.caseId}`, merchantId: scenario.merchant,
           amountPaise: sc.amountPaise, source: "natural", reference: sc.externalRef,
         });
-        if (out.kind === "recovered") recoveredAt.set(ev.caseId, elapsed);
+        if (out.kind === "recovered") {
+          recoveredAt.set(ev.caseId, elapsed);
+          closed.add(ev.caseId);
+          remainingSteps.delete(ev.caseId);
+        }
       } else {
         await verifier.onOutcome({
           caseId: ev.caseId,
           result: ev.kind === "opt_out" ? "opted_out" : "disputed",
         });
+        closed.add(ev.caseId);
+        remainingSteps.delete(ev.caseId);
       }
     }
 
@@ -184,13 +244,14 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       const p = pendingSettlements[i]!;
       if (p.atMs > elapsed) continue;
       pendingSettlements.splice(i, 1);
-      if (recoveredAt.has(p.caseId)) continue;
+      if (closed.has(p.caseId)) continue;
       const settled = await verifier.onSettlement({
         id: `set_${p.idemKey.slice(0, 16)}`, merchantId: scenario.merchant,
         amountPaise: p.amountPaise, source: "connector", idemKey: p.idemKey,
       });
       if (settled.kind === "recovered") {
         recoveredAt.set(p.caseId, elapsed);
+        closed.add(p.caseId);
         remainingSteps.delete(p.caseId);
       }
     }
@@ -198,12 +259,103 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
     // What the agent decided to do.
     for (const due of await scheduler.tick("batch_worker", 500)) {
       const sc = byId.get(due.caseId);
-      if (!sc || recoveredAt.has(due.caseId)) {
+      if (!sc || closed.has(due.caseId)) {
         await scheduler.complete(due.id);
         continue;
       }
       await runStep(sc, due.actionRef.actionId, due.actionRef.params, due.actionRef.attemptNo, elapsed);
       await scheduler.complete(due.id);
+    }
+
+    // ---- detector, suppression, staged release -------------------------
+    ticksInWindow++;
+    const windowClosed = ticksInWindow >= TICKS_PER_WINDOW;
+
+    const observations: SegmentObservation[] = [];
+    for (const [label, w] of windowCounts) {
+      const base = baselineCounts.get(label);
+      if (!base || base.attempts < 30) continue;
+      const seg: SegmentKey = Object.fromEntries(
+        label.split("&").map((part) => part.split("=") as [string, string]),
+      );
+      observations.push({
+        segment: seg,
+        attempts: w.attempts,
+        approvals: w.approvals,
+        baselineAttempts: base.attempts,
+        baselineApprovals: base.approvals,
+      });
+    }
+
+    for (const candidate of windowClosed ? detector.evaluate(observations) : []) {
+      if (openIncidents.has(candidate.label)) continue;
+      const incidentId = await incidents.open(candidate, "detector");
+      openIncidents.set(candidate.label, { id: incidentId, segment: candidate.segment });
+      stats.incidentsOpened++;
+
+      // Park every live case in the affected segment. They stop acting; the
+      // incident owns their resumption from here.
+      const affected = cohort
+        .filter(
+          (c) =>
+            !closed.has(c.caseId) &&
+            remainingSteps.has(c.caseId) &&
+            Object.entries(candidate.segment).every(([k, v]) =>
+              k === "gateway" ? c.gateway === v : k === "issuer" ? c.issuer === v : true,
+            ),
+        )
+        .map((c) => c.caseId);
+      stats.casesParked += await incidents.attachAndSuppress(incidentId, affected);
+      members.set(incidentId, new Set(affected));
+      for (const id of affected) remainingSteps.delete(id);
+      await incidents.recordRca(incidentId, {
+        narrative: `approval rate on ${candidate.label} fell to ${(candidate.test.observedRate * 100).toFixed(1)}% against a ${(candidate.test.baselineRate * 100).toFixed(1)}% baseline (z ${candidate.test.z.toFixed(2)}, n ${candidate.attempts})`,
+        proposed: "hold affected cases and stage their release once the rate recovers",
+        surface: "simulated",
+      });
+    }
+
+    // Release once the segment is healthy again.
+    for (const [label, rec] of openIncidents) {
+      if (!windowClosed) continue;
+      const base = baselineCounts.get(label);
+      if (!base || base.attempts === 0) continue;
+      const w = windowCounts.get(label);
+      const baselineRate = base.approvals / base.attempts;
+      // With every case on the segment parked there is no traffic left to prove
+      // recovery, and waiting for some deadlocks the incident forever. That is
+      // what the canary is for: release the first 5% on a neutral reading and
+      // let the released slice generate the signal the next window judges.
+      const observedRate = w && w.attempts > 0 ? w.approvals / w.attempts : baselineRate;
+      const step = await release.step(rec.id, { observedRate, baselineRate });
+      if (step.action === "completed") {
+        openIncidents.delete(label);
+        detector.reset(label);
+      }
+      // Whatever this step released picks its plan back up. The incident owns
+      // resumption, so the plan is re-created here rather than by the case.
+      if (step.releasedNow > 0) {
+        const stillParked = new Set(await incidents.parkedCases(rec.id));
+        for (const c of cohort) {
+          if (closed.has(c.caseId) || stillParked.has(c.caseId)) continue;
+          if (remainingSteps.has(c.caseId)) continue;
+          if (!members.get(rec.id)?.has(c.caseId)) continue;
+          const resume = genericFallback(c);
+          if (resume) await startPlan(c, [{ actionId: resume, params: defaultParams(resume, c) }], 0);
+        }
+      }
+    }
+
+    // Fold the window into the baseline and start a fresh one.
+    if (windowClosed) {
+      for (const [label, w] of windowCounts) {
+        const base = baselineCounts.get(label) ?? { attempts: 0, approvals: 0 };
+        base.attempts += w.attempts;
+        base.approvals += w.approvals;
+        baselineCounts.set(label, base);
+      }
+      windowCounts.clear();
+      ticksInWindow = 0;
     }
 
     opts.onProgress?.(50 + Math.round((elapsed / horizonMs) * 50));
@@ -213,7 +365,7 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
   // not merely unfinished. Leaving them mid-state would misreport the batch.
   clock.advanceTo(new Date(t0 + horizonMs));
   for (const sc of cohort) {
-    if (recoveredAt.has(sc.caseId)) continue;
+    if (closed.has(sc.caseId)) continue;
     const { rows: st } = await getPool().query<{ state: string }>(
       "SELECT state FROM cases WHERE id = $1", [sc.caseId],
     );
@@ -256,6 +408,7 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
     tier0Resolved: stats.tier0, tier1Escalated: stats.tier1,
     providerCalls: stats.providerCalls, actionsExecuted: stats.executed,
     stepErrors: stats.stepErrors, degradedEscalations: stats.degraded,
+    incidentsOpened: stats.incidentsOpened, casesParked: stats.casesParked,
     errorSamples: stats.errorSamples,
     policyBlocks: await policyEngine.blockCountsByRule(),
     terminalStates,
@@ -271,7 +424,7 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
   // ---- helpers ------------------------------------------------------------
 
   /** Diagnose, plan, and schedule the first step. */
-  async function plan(sc: SyntheticCase): Promise<void> {
+  async function plan(sc: SyntheticCase, startDelayMs = 0): Promise<void> {
     const evidenceId = `ev_${sc.caseId}`;
     await blackboard.addEvidence({
       id: evidenceId, caseId: sc.caseId, kind: "decline_code",
@@ -285,7 +438,7 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
         caseId: sc.caseId, actor: "tier0", eventType: "plan_selected",
         payload: { ruleId: outcome.plan.ruleId, cause: outcome.classification.cause, tier: 0 },
       });
-      await startPlan(sc, outcome.plan.steps.map((st) => ({ actionId: st.actionId, params: st.params })), 0);
+      await startPlan(sc, outcome.plan.steps.map((st) => ({ actionId: st.actionId, params: st.params })), 0, startDelayMs);
       return;
     }
 
@@ -298,7 +451,7 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       // forbidden from attempting.
       const fallback = genericFallback(sc);
       if (fallback) {
-        await startPlan(sc, [{ actionId: fallback, params: defaultParams(fallback, sc) }], 1);
+        await startPlan(sc, [{ actionId: fallback, params: defaultParams(fallback, sc) }], 1, startDelayMs);
       }
       return;
     }
@@ -333,7 +486,7 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
         ? "create_ops_escalation"
         : null;
       if (escalation) {
-        await startPlan(sc, [{ actionId: escalation, params: defaultParams(escalation, sc) }], 2);
+        await startPlan(sc, [{ actionId: escalation, params: defaultParams(escalation, sc) }], 2, startDelayMs);
       }
       return;
     }
@@ -363,6 +516,7 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       sc,
       [{ actionId: ranked.selected.actionId, params: defaultParams(ranked.selected.actionId, sc) }],
       1,
+      startDelayMs,
     );
   }
 
@@ -377,14 +531,15 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
     sc: SyntheticCase,
     steps: { actionId: string; params: Record<string, unknown> }[],
     tier: number,
+    startDelayMs = 0,
   ): Promise<void> {
-    if (steps.length === 0) return;
+    if (steps.length === 0 || closed.has(sc.caseId)) return;
     stats.planned++;
     remainingSteps.set(sc.caseId, [...steps]);
     attemptNos.set(sc.caseId, 0);
     await events.append(sc.caseId, { type: "diagnosis_started", tier: tier as 0 | 1 | 2 }, "runner");
     await events.append(sc.caseId, { type: "plan_proposed", planVersion: 1 }, "runner");
-    await advancePlan(sc, 0);
+    await advancePlan(sc, startDelayMs);
   }
 
   /** Schedule the next step, honouring a `wait` step's delay. */
@@ -459,6 +614,8 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       // A degraded segment swallows the attempt — this is the injection biting.
       const degraded = world.degradedAt(elapsed, sc);
       const paid = out.result.detail["paid"] === true && !degraded;
+      // Every attempt feeds the detector, whether it converted or not.
+      for (const seg of segmentsOf(sc)) bump(windowCounts, segmentLabel(seg), !degraded);
       if (paid) {
         // 2h to 3 days for the customer to act on it.
         const latency = Math.floor((2 + settleRand() * 70) * HOUR);

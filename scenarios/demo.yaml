@@ -60,4 +60,7 @@ injections:
     type: gateway_degradation
     segment: { gateway: A, issuer: HDFC, method: card }
     approval_drop: 0.55
-    duration_minutes: 40
+    # Must span at least the detector's dwell requirement of two windows, or a
+    # real degradation is indistinguishable from a single-window blip — which
+    # is exactly what dwell exists to filter out.
+    duration_minutes: 360

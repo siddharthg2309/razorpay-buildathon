@@ -47,6 +47,13 @@ export interface DetectorConfig {
   closeWindows: number;
 }
 
+/**
+ * How much of a child's rate drop a parent must reproduce before it counts as
+ * explaining it. At 0.9 a gateway whose aggregate fell nearly as far as the
+ * issuer's owns the incident; one merely diluted by a single bad issuer does not.
+ */
+const PARENT_EXPLAINS_RATIO = 0.9;
+
 export const DEFAULT_DETECTOR_CONFIG: DetectorConfig = {
   volumeFloor: 30,
   alpha: 0.05,
@@ -119,12 +126,37 @@ export class AnomalyDetector {
       (c) => (this.#dwell.get(c.label) ?? 0) >= this.config.dwellWindows,
     );
 
-    // Child suppression: if a coarser segment also fired, the finer one is
-    // explained by it. Opening both is how one gateway outage becomes forty
-    // incidents.
-    return dwelled.filter(
-      (c) => !dwelled.some((other) => other !== c && isAncestor(other.segment, c.segment)),
-    );
+    // Child suppression, by explanatory power rather than by depth.
+    //
+    // Taking the coarsest firing segment unconditionally over-suppresses: when
+    // one issuer on a gateway fails, the gateway aggregate also crosses
+    // significance, and opening at gateway level parks every case on it
+    // including the three issuers that are fine.
+    //
+    // So a parent suppresses a child only when it explains the drop about as
+    // well — its own rate fell comparably. When the child's drop is materially
+    // deeper, the child is the locus and the parent is just diluted by it.
+    const drop = (c: Candidate): number => c.test.baselineRate - c.test.observedRate;
+
+    return dwelled.filter((c) => {
+      const explainedByParent = dwelled.some(
+        (other) =>
+          other !== c &&
+          isAncestor(other.segment, c.segment) &&
+          drop(other) >= drop(c) * PARENT_EXPLAINS_RATIO,
+      );
+      if (explainedByParent) return false;
+
+      // Mirror image: drop a parent whose drop is materially shallower than a
+      // child's, since the child is where the failure actually is.
+      const supersededByChild = dwelled.some(
+        (other) =>
+          other !== c &&
+          isAncestor(c.segment, other.segment) &&
+          drop(c) < drop(other) * PARENT_EXPLAINS_RATIO,
+      );
+      return !supersededByChild;
+    });
   }
 
   /** True once a segment has been healthy for the configured run of windows. */

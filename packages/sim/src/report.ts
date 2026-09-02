@@ -47,6 +47,8 @@ export function renderReport(r: BatchReport): string {
     ["T1 escalated", r.tier1Escalated],
     ["provider calls", r.providerCalls],
     ["degraded escal.", r.degradedEscalations],
+    ["incidents opened", r.incidentsOpened],
+    ["cases parked", r.casesParked],
     ["actions executed", r.actionsExecuted],
   ] as const;
   for (let i = 0; i < Math.max(tiers.length, terminals.length); i++) {

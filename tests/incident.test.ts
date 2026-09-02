@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   VirtualClock, benjaminiHochberg, days, normalCdf, twoProportionZTest, wilsonInterval,
 } from "@rra/core";
-import { closePool, getPool } from "@rra/db";
+import { CaseEventStore, closePool, getPool } from "@rra/db";
 import {
   AnomalyDetector, CaseManager, IncidentManager, ReleaseController, Scheduler,
   isAncestor, proposeReroute, segmentLabel, type SegmentObservation,
@@ -299,5 +299,90 @@ describe("routing proposal", () => {
     expect(p.requiresApproval).toBe(true);
     expect(p.canaryPercent).toBe(5);
     expect(p.ttlHours).toBeGreaterThan(0);
+  });
+});
+
+describe("child suppression picks the locus, not just the coarsest segment", () => {
+  const detector = () => new AnomalyDetector(new VirtualClock(T0));
+
+  it("opens at the parent when the whole gateway is down", () => {
+    const d = detector();
+    // Every issuer on gateway A degrades equally, so the gateway explains it.
+    const family: SegmentObservation[] = [
+      degraded({ segment: { gateway: "A" } }),
+      degraded({ segment: { gateway: "A", issuer: "HDFC" } }),
+      degraded({ segment: { gateway: "A", issuer: "ICICI" } }),
+    ];
+    d.evaluate(family);
+    const fired = d.evaluate(family);
+    expect(fired.map((f) => f.label)).toEqual(["gateway=A"]);
+  });
+
+  it("opens at the child when one issuer is dragging a healthy gateway down", () => {
+    const d = detector();
+    // HDFC collapses; the gateway aggregate dips only because HDFC is in it.
+    // Opening at gateway level here would park every case on A, including the
+    // issuers that are fine.
+    const family: SegmentObservation[] = [
+      // gateway aggregate: 78% against a 90% baseline — a shallow dip.
+      healthy({ segment: { gateway: "A" }, attempts: 1600, approvals: 1248 }),
+      // HDFC: 40% against the same baseline — the real failure.
+      degraded({ segment: { gateway: "A", issuer: "HDFC" }, attempts: 400, approvals: 160 }),
+    ];
+    d.evaluate(family);
+    const fired = d.evaluate(family);
+    expect(fired.map((f) => f.label)).toEqual(["gateway=A&issuer=HDFC"]);
+  });
+});
+
+describe("cases that terminate while parked", () => {
+  it("leaves the parked set without an illegal transition back to SCHEDULED", async () => {
+    const clock = new VirtualClock(T0);
+    const incidents = new IncidentManager(clock);
+    const events = new CaseEventStore(clock);
+    const cases = new CaseManager(clock);
+
+    await getPool().query(`INSERT INTO merchants (id,name,policy_version) VALUES ('m_1','A','v7') ON CONFLICT DO NOTHING`);
+    await getPool().query(`INSERT INTO customers (id,merchant_id) VALUES ('cu_1','m_1') ON CONFLICT DO NOTHING`);
+    for (const id of ["c_live", "c_gone"]) {
+      await cases.openOrAttach({
+        caseId: id, merchantId: "m_1", customerId: "cu_1",
+        obligationId: `ob_${id}`, externalRef: `ext_${id}`,
+        domain: "payment_failure", amountPaise: 420_000, dueAt: clock.now(), holdout: false,
+      });
+    }
+
+    const incidentId = await incidents.openFromDowntime({ gateway: "A" });
+    await incidents.attachAndSuppress(incidentId, ["c_live", "c_gone"]);
+
+    // The customer opts out while suppressed. That outranks the incident.
+    await events.append("c_gone", { type: "terminal_reached", state: "OPTED_OUT", reason: "unsubscribed" }, "verifier");
+
+    await expect(incidents.release(incidentId, ["c_live", "c_gone"])).resolves.toBeUndefined();
+
+    const states = await getPool().query<{ id: string; state: string }>(
+      "SELECT id, state FROM cases WHERE id = ANY($1::text[]) ORDER BY id", [["c_live", "c_gone"]],
+    );
+    expect(states.rows.find((r) => r.id === "c_gone")?.state).toBe("OPTED_OUT");
+    expect(states.rows.find((r) => r.id === "c_live")?.state).toBe("SCHEDULED");
+    expect(await incidents.parkedCases(incidentId)).toHaveLength(0);
+  });
+
+  it("does not park a case that has already terminated", async () => {
+    const clock = new VirtualClock(T0);
+    const incidents = new IncidentManager(clock);
+    const events = new CaseEventStore(clock);
+    const cases = new CaseManager(clock);
+    await getPool().query(`INSERT INTO merchants (id,name,policy_version) VALUES ('m_1','A','v7') ON CONFLICT DO NOTHING`);
+    await getPool().query(`INSERT INTO customers (id,merchant_id) VALUES ('cu_1','m_1') ON CONFLICT DO NOTHING`);
+    await cases.openOrAttach({
+      caseId: "c_done", merchantId: "m_1", customerId: "cu_1",
+      obligationId: "ob_done", externalRef: "ext_done",
+      domain: "payment_failure", amountPaise: 420_000, dueAt: clock.now(), holdout: false,
+    });
+    await events.append("c_done", { type: "terminal_reached", state: "RECOVERED", reason: "captured" }, "verifier");
+
+    const incidentId = await incidents.openFromDowntime({ gateway: "A" });
+    expect(await incidents.attachAndSuppress(incidentId, ["c_done"])).toBe(0);
   });
 });

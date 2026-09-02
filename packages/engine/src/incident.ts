@@ -84,6 +84,12 @@ export class IncidentManager {
       );
       if ((already.rowCount ?? 0) > 0) continue;
 
+      const { rowCount: live } = await getPool().query(
+        "SELECT 1 FROM cases WHERE id = $1 AND closed_at IS NULL",
+        [caseId],
+      );
+      if ((live ?? 0) === 0) continue; // already terminal; nothing to suppress
+
       await getPool().query(
         "INSERT INTO incident_members (incident_id, case_id, attached_at) VALUES ($1,$2,$3)",
         [incidentId, caseId, this.clock.now()],
@@ -119,8 +125,23 @@ export class IncidentManager {
     return rows.map((r) => r.case_id);
   }
 
-  /** Release a slice back into the live population. */
+  /**
+   * Release a slice back into the live population.
+   *
+   * A parked case can still terminate: a customer may opt out or dispute while
+   * their case is suppressed, and those signals outrank the incident. Such a
+   * case leaves the parked set but is never transitioned back to SCHEDULED —
+   * the state machine rejects that outright, and rightly so.
+   */
   async release(incidentId: string, caseIds: readonly string[]): Promise<void> {
+    if (caseIds.length === 0) return;
+
+    const { rows } = await getPool().query<{ id: string }>(
+      "SELECT id FROM cases WHERE id = ANY($1::text[]) AND closed_at IS NULL",
+      [caseIds],
+    );
+    const stillLive = new Set(rows.map((r) => r.id));
+
     await withTransaction(async (client) => {
       await client.query(
         "UPDATE incident_members SET released_at = $3 WHERE incident_id = $1 AND case_id = ANY($2::text[])",
@@ -128,17 +149,23 @@ export class IncidentManager {
       );
     });
     for (const caseId of caseIds) {
+      if (!stillLive.has(caseId)) continue;
       await this.events.append(caseId, { type: "incident_released", incidentId }, "release_controller");
     }
     await this.ledger.append({
       caseId: incidentId, actor: "release_controller", eventType: "cases_released",
-      payload: { released: caseIds.length },
+      payload: { released: stillLive.size, closedWhileParked: caseIds.length - stillLive.size },
     });
   }
 
   /** Re-park a slice the circuit breaker pulled back. */
   async repark(incidentId: string, caseIds: readonly string[]): Promise<void> {
     for (const caseId of caseIds) {
+      const { rowCount } = await getPool().query(
+        "SELECT 1 FROM cases WHERE id = $1 AND closed_at IS NULL",
+        [caseId],
+      );
+      if ((rowCount ?? 0) === 0) continue; // terminated while released
       await getPool().query(
         "UPDATE incident_members SET released_at = NULL WHERE incident_id = $1 AND case_id = $2",
         [incidentId, caseId],

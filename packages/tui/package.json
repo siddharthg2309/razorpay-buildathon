@@ -1,0 +1,8 @@
+{
+  "name": "@rra/tui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/tui.ts",
+  "dependencies": { "@rra/console": "*", "@rra/db": "*" }
+}

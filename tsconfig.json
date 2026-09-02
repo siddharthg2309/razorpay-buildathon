@@ -7,6 +7,8 @@
     { "path": "./packages/engine" },
     { "path": "./packages/agents" },
     { "path": "./packages/attribution" },
-    { "path": "./packages/sim" }
+    { "path": "./packages/sim" },
+    { "path": "./packages/console" },
+    { "path": "./packages/tui" }
   ]
 }

@@ -33,6 +33,22 @@ The provider is optional. Without `OPENAI_API_KEY` the engine still runs end to
 end — Tier 0 carries ~95% of cases — but Tier 1 falls into degraded mode and
 escalates, and the ablation says so rather than reporting a meaningless delta.
 
+## Console
+
+```bash
+npm run console   # http://localhost:4000
+npm run tui       # same event stream, in a shell
+```
+
+Five screens: batch run, cases and the per-case decision trail, incidents,
+policy, attribution. No build step — the console is a plain Node HTTP server
+rendering HTML, so `--reset` returns to a known state in seconds and there is no
+bundler to fail on demo day. Charts are hand-rolled; the visuals here are simple
+and a chart library is a dependency risk.
+
+> The build plan specifies Next.js + Tailwind. Deviating for the reason above;
+> the design tokens in §4a are implemented verbatim.
+
 > The build plan writes `pnpm`. This repo uses **npm workspaces** — installing
 > pnpm globally needs root on this machine. Script names are unchanged
 > (`npm test`, `npm run batch`).
@@ -50,6 +66,8 @@ escalates, and the ablation says so rather than reporting a meaningless delta.
                    reducer, constrained optimizer, agent runtime
 /packages/attribution  stratified holdout, incremental estimator, bootstrap
 /packages/sim      scenario loader, cohort generator, world model, batch runner
+/packages/console  five screens + SSE event stream, zero build step
+/packages/tui      terminal view over the same event stream
 /migrations        numbered SQL, applied in order
 /actions           the action library
 /taxonomy          decline codes per rail
@@ -103,6 +121,10 @@ escalates, and the ablation says so rather than reporting a meaningless delta.
 | The same seed produces identical batch output | `tests/sim.test.ts` |
 | Every case in a batch reaches a terminal state | `tests/sim.test.ts` |
 | A provider outage escalates rather than dropping the case | `tests/sim.test.ts` |
+| One issuer failing opens at the issuer, not the whole gateway | `tests/incident.test.ts` |
+| A case that terminates while parked is never released back to SCHEDULED | `tests/incident.test.ts` |
+| The case trail shows rule, policy version, token and settlement | `tests/console.test.ts` |
+| Every executed row on the trail carries a SIM or LIVE badge | `tests/console.test.ts` |
 | No `now()` / `CURRENT_TIMESTAMP` / `Date.now()` outside `Clock` | `npm run lint:clock` |
 
 ## Status
@@ -119,19 +141,20 @@ escalates, and the ablation says so rather than reporting a meaningless delta.
 | 7 — Incident mode | done |
 | 8 — Attribution estimator | done |
 | 9 — Simulator + batch runner | done |
-| 10 — Console UI | next |
-| 11 — Demo hardening | pending |
+| 10 — Console UI | done |
+| 11 — Demo hardening | next |
 
-204 tests.
+219 tests.
 
 ### Current batch output
 
 ```
-₹ 15.97 L        ₹ 8.52 L        ₹ 6.84 L        24.6%
+₹ 15.86 L        ₹ 8.34 L        ₹ 6.79 L        22.9%
 GROSS            EST. INCREMENTAL TRUE (SIM)      ERROR
-                 95% CI ₹ 6.24 L – ₹ 10.76 L
+                 95% CI ₹ 6.08 L – ₹ 10.61 L
 interval contains ground truth: YES
-treated 1608 @ 35.1%   holdout 392 @ 17.6%   lift 17.5%
+treated 1608 @ 35.0%   holdout 392 @ 17.6%   lift 17.3%
+1 incident opened at gateway=A&issuer=HDFC · 192 cases parked · released 9/28/69/86
 ```
 
 The residual error is not a pricing bug. It is chance imbalance between the arms
