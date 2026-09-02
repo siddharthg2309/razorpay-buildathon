@@ -16,7 +16,8 @@
     "db:create": "createdb recovery_agent || true",
     "db:migrate": "tsx packages/db/src/migrate.ts",
     "db:reset": "dropdb --if-exists recovery_agent && createdb recovery_agent && npm run db:migrate",
-    "lint:clock": "tsx scripts/lint-clock.ts"
+    "lint:clock": "tsx scripts/lint-clock.ts",
+    "batch": "tsx packages/sim/src/cli.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

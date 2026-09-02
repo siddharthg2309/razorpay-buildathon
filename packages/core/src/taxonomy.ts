@@ -61,6 +61,19 @@ export class DeclineTaxonomy {
   codesFor(rail: Rail): readonly string[] {
     return this.entries().filter((e) => e.rail === rail).map((e) => e.code).sort();
   }
+
+  /** Codes on this rail that produce the given cause. Empty when the pairing
+   *  is impossible — a revoked mandate has no meaning on a wallet. */
+  codesForCause(rail: Rail, cause: string): readonly string[] {
+    return this.entries()
+      .filter((e) => e.rail === rail && e.cause === cause)
+      .map((e) => e.code)
+      .sort();
+  }
+
+  causesFor(rail: Rail): readonly string[] {
+    return [...new Set(this.entries().filter((e) => e.rail === rail).map((e) => e.cause))].sort();
+  }
 }
 
 interface RawCode {

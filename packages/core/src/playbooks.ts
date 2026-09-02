@@ -35,9 +35,18 @@ export class PlaybookTable {
     this.#byKey = new Map(playbooks.map((p) => [`${p.domain}::${p.cause}`, p]));
   }
 
-  /** Null means no default plan exists — the case escalates rather than improvising. */
+  /**
+   * Falls back from a domain-specific playbook to the cause's cross-domain
+   * default. Without the fallback the table has to enumerate the full
+   * domain x cause cross product, and every gap silently escalates a case the
+   * taxonomy had already resolved — which inflates Tier 1 with cases the model
+   * adds nothing to.
+   *
+   * Null still means no default plan exists at all, and the case escalates
+   * rather than improvising.
+   */
   planFor(domain: Domain, cause: string): Plan | null {
-    const pb = this.#byKey.get(`${domain}::${cause}`);
+    const pb = this.#byKey.get(`${domain}::${cause}`) ?? this.#byKey.get(`*::${cause}`);
     if (!pb) return null;
     return {
       ruleId: pb.ruleId,
@@ -50,7 +59,7 @@ export class PlaybookTable {
   }
 
   has(domain: Domain, cause: string): boolean {
-    return this.#byKey.has(`${domain}::${cause}`);
+    return this.#byKey.has(`${domain}::${cause}`) || this.#byKey.has(`*::${cause}`);
   }
 
   all(): readonly Playbook[] {

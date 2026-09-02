@@ -74,51 +74,94 @@ export class SimulatedPSP implements PSPAdapter {
     return this.latent.get(customerId) ?? DEFAULT_LATENT;
   }
 
-  async createPaymentLink(call: AdapterCall, _t: CapabilityToken): Promise<CallResult> {
+  /**
+   * The simulator's own conversion model.
+   *
+   * These rates are authored here and are deliberately NOT the p_recover priors
+   * in actions/library.yaml. The library holds what the agent *believes*; this
+   * holds what the world actually does. If they were the same table the
+   * optimizer would be scoring against its own answer key, and the recovery
+   * number would be circular — so the gap between them is the optimizer's
+   * regret, and it is meant to exist.
+   */
+  #convert(call: AdapterCall, capability: string): boolean {
     const latent = this.latentFor(call.customerId);
     const fundsAvailable = this.clock.now().getTime() >= latent.hasFundsAfterMs;
-    const paid = fundsAvailable && !latent.cardExpired && this.#rand() < latent.respondsToLink;
-    const reference = `sim_link_${call.idemKey.slice(0, 10)}`;
+    const draw = this.#rand();
+
+    switch (capability) {
+      case "createPaymentLink":
+        // A link cannot work without funds, and not on a dead instrument.
+        if (!fundsAvailable || latent.cardExpired || latent.mandateState === "revoked") return false;
+        return draw < latent.respondsToLink;
+
+      case "requestPaymentMethodUpdate":
+        // The one action that addresses a dead instrument at its root, so it
+        // converts best exactly where a link cannot work at all.
+        if (latent.cardExpired || latent.mandateState === "revoked") return draw < 0.42;
+        return draw < 0.12;
+
+      case "sendApprovedTemplate":
+        // A nudge only helps someone who could already have paid.
+        if (!fundsAvailable || latent.cardExpired || latent.mandateState === "revoked") return false;
+        return draw < 0.16;
+
+      case "resumeCheckout":
+        return fundsAvailable && draw < 0.24;
+
+      case "createOpsEscalation":
+        // A human works the case, and is effective across causes.
+        return draw < 0.27;
+
+      default:
+        return false;
+    }
+  }
+
+  #record(call: AdapterCall, capability: string, prefix: string): CallResult {
+    const paid = this.#convert(call, capability);
+    const reference = `${prefix}_${call.idemKey.slice(0, 10)}`;
     this.#settled.set(call.idemKey, {
       found: true,
       captured: paid,
       amountPaise: Number(call.params["amount"] ?? 0),
       reference,
     });
-    return { ok: true, reference, detail: { paid, fundsAvailable } };
-  }
-
-  async resumeCheckout(call: AdapterCall, _t: CapabilityToken): Promise<CallResult> {
-    const resumed = this.#rand() < this.latentFor(call.customerId).respondsToLink;
-    const reference = `sim_checkout_${call.idemKey.slice(0, 10)}`;
-    this.#settled.set(call.idemKey, { found: true, captured: resumed, reference });
-    return { ok: true, reference, detail: { resumed } };
-  }
-
-  async requestPaymentMethodUpdate(call: AdapterCall, _t: CapabilityToken): Promise<CallResult> {
     const latent = this.latentFor(call.customerId);
-    // A revoked mandate is exactly the case where an update request is the only
-    // path, so it succeeds more often than the generic link response rate.
-    const updated = this.#rand() < (latent.mandateState === "revoked" ? 0.44 : latent.respondsToLink);
-    const reference = `sim_update_${call.idemKey.slice(0, 10)}`;
-    this.#settled.set(call.idemKey, { found: true, captured: false, reference });
-    return { ok: true, reference, detail: { updated } };
-  }
-
-  async sendApprovedTemplate(call: AdapterCall, _t: CapabilityToken): Promise<CallResult> {
-    const reference = `sim_msg_${call.idemKey.slice(0, 10)}`;
-    this.#settled.set(call.idemKey, { found: true, captured: false, reference });
     return {
       ok: true,
       reference,
-      detail: { delivered: true, channel: call.params["channel"], template: call.params["template_id"] },
+      detail: {
+        paid,
+        fundsAvailable: this.clock.now().getTime() >= latent.hasFundsAfterMs,
+        capability,
+      },
+    };
+  }
+
+  async createPaymentLink(call: AdapterCall, _t: CapabilityToken): Promise<CallResult> {
+    return this.#record(call, "createPaymentLink", "sim_link");
+  }
+
+  async resumeCheckout(call: AdapterCall, _t: CapabilityToken): Promise<CallResult> {
+    return this.#record(call, "resumeCheckout", "sim_checkout");
+  }
+
+  async requestPaymentMethodUpdate(call: AdapterCall, _t: CapabilityToken): Promise<CallResult> {
+    return this.#record(call, "requestPaymentMethodUpdate", "sim_update");
+  }
+
+  async sendApprovedTemplate(call: AdapterCall, _t: CapabilityToken): Promise<CallResult> {
+    const res = this.#record(call, "sendApprovedTemplate", "sim_msg");
+    return {
+      ...res,
+      detail: { ...res.detail, delivered: true, channel: call.params["channel"], template: call.params["template_id"] },
     };
   }
 
   async createOpsEscalation(call: AdapterCall, _t: CapabilityToken): Promise<CallResult> {
-    const reference = `sim_esc_${call.idemKey.slice(0, 10)}`;
-    this.#settled.set(call.idemKey, { found: true, captured: false, reference });
-    return { ok: true, reference, detail: { queue: call.params["queue"] } };
+    const res = this.#record(call, "createOpsEscalation", "sim_esc");
+    return { ...res, detail: { ...res.detail, queue: call.params["queue"] } };
   }
 
   /**

@@ -22,6 +22,17 @@ npm test
 
 `npm run db:reset` drops and rebuilds from migrations.
 
+## Running the batch
+
+```bash
+npm run batch scenarios/demo.yaml            # 2000 cases under the virtual clock
+npm run batch scenarios/demo.yaml -- --ablate  # deliberation on vs off
+```
+
+The provider is optional. Without `OPENAI_API_KEY` the engine still runs end to
+end — Tier 0 carries ~95% of cases — but Tier 1 falls into degraded mode and
+escalates, and the ablation says so rather than reporting a meaningless delta.
+
 > The build plan writes `pnpm`. This repo uses **npm workspaces** — installing
 > pnpm globally needs root on this machine. Script names are unchanged
 > (`npm test`, `npm run batch`).
@@ -37,6 +48,8 @@ npm test
 /packages/connectors  PSPAdapter, SimulatedPSP, RazorpayTestAdapter
 /packages/agents   LLMProvider, OpenAI adapter, specialists, deliberation
                    reducer, constrained optimizer, agent runtime
+/packages/attribution  stratified holdout, incremental estimator, bootstrap
+/packages/sim      scenario loader, cohort generator, world model, batch runner
 /migrations        numbered SQL, applied in order
 /actions           the action library
 /taxonomy          decline codes per rail
@@ -85,6 +98,11 @@ npm test
 | `holdout_flag` cannot be changed once assigned (DB trigger) | `tests/attribution.test.ts` |
 | Natural recovery is excluded from **both** arms, so lift is not inflated | `tests/attribution.test.ts` |
 | The estimate's interval brackets simulator ground truth | `tests/attribution.test.ts` |
+| Every taxonomy cause has a reachable playbook | `tests/tier0.test.ts` |
+| Generated cases never carry a (rail, code) the taxonomy cannot classify | `tests/sim.test.ts` |
+| The same seed produces identical batch output | `tests/sim.test.ts` |
+| Every case in a batch reaches a terminal state | `tests/sim.test.ts` |
+| A provider outage escalates rather than dropping the case | `tests/sim.test.ts` |
 | No `now()` / `CURRENT_TIMESTAMP` / `Date.now()` outside `Clock` | `npm run lint:clock` |
 
 ## Status
@@ -100,7 +118,26 @@ npm test
 | 6 — Agent runtime + provider adapter | done |
 | 7 — Incident mode | done |
 | 8 — Attribution estimator | done |
-| 9 — Simulator + batch runner | next |
-| 10–11 | pending |
+| 9 — Simulator + batch runner | done |
+| 10 — Console UI | next |
+| 11 — Demo hardening | pending |
 
-189 tests.
+204 tests.
+
+### Current batch output
+
+```
+₹ 15.97 L        ₹ 8.52 L        ₹ 6.84 L        24.6%
+GROSS            EST. INCREMENTAL TRUE (SIM)      ERROR
+                 95% CI ₹ 6.24 L – ₹ 10.76 L
+interval contains ground truth: YES
+treated 1608 @ 35.1%   holdout 392 @ 17.6%   lift 17.5%
+```
+
+The residual error is not a pricing bug. It is chance imbalance between the arms
+on an **unobservable** covariate: 19.9% of treated would have paid anyway
+against 17.6% of holdout, and that ~2pp gap accounts for the whole overshoot.
+Nothing observable can correct it, which is exactly what the interval is for. A
+value-band-stratified estimator was tried and made the point estimate worse, so
+the simpler specified form is the headline and the stratified figure is reported
+beside it as a diagnostic.

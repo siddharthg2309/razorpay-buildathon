@@ -1,0 +1,63 @@
+# The demo cohort.
+#
+# Batch size is 2000, not a few hundred: the confidence interval is driven by
+# the holdout arm, and at 400/20% the holdout is n=80 and the interval on the
+# rupee figure is roughly +/-40%. Cases are nearly free under the virtual clock,
+# so there is no reason to be underpowered.
+
+seed: 20260902
+merchant: acme-subscriptions
+
+cohort:
+  size: 2000
+
+  domains:
+    subscription_renewal: 0.55
+    payment_failure: 0.30
+    checkout_abandonment: 0.10
+    overdue_invoice: 0.05
+
+  rails:
+    card: 0.45
+    upi_autopay: 0.35
+    enach: 0.15
+    netbanking: 0.05
+
+  causes:
+    insufficient_funds: 0.34
+    expired_card: 0.14
+    mandate_revoked: 0.09
+    otp_failure: 0.12
+    gateway_timeout: 0.16
+    issuer_decline: 0.10
+    unmapped_code: 0.05        # forces Tier 1 so the model path is exercised
+
+  # lognormal(mu, sigma) over rupees, converted to paise.
+  value_distribution:
+    mu: 7.6
+    sigma: 0.9
+
+world:
+  # Customers who would have paid with no intervention at all. This is the
+  # holdout arm's recovery rate, and the thing attribution must not claim
+  # credit for.
+  natural_recovery_rate: 0.18
+  # How responsive the rest are to a well-chosen action.
+  responds_to_link: 0.35
+  # NSF customers whose funds clear on payday.
+  funds_clear_after_hours: 48
+  opt_out_rate: 0.02
+  dispute_rate: 0.01
+
+holdout: 0.20
+
+measurement:
+  window_days: 14
+  natural_recovery_window_minutes: 30
+
+injections:
+  - at_hours: 2
+    type: gateway_degradation
+    segment: { gateway: A, issuer: HDFC, method: card }
+    approval_drop: 0.55
+    duration_minutes: 40

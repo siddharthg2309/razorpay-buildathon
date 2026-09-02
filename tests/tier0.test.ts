@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadConfig, parseTaxonomy } from "@rra/core";
+import { loadConfig, parsePlaybooks, parseTaxonomy } from "@rra/core";
 import { Tier0Resolver } from "@rra/engine";
 
 const config = loadConfig();
@@ -68,6 +68,16 @@ describe("playbooks", () => {
   });
 });
 
+describe("playbook coverage", () => {
+  it("gives every taxonomy cause a reachable playbook", () => {
+    const causes = [...new Set(config.taxonomy.entries().map((e) => e.cause))];
+    const uncovered = causes.filter((c) => !config.playbooks.has("payment_failure", c));
+    // A gap here silently escalates a case the taxonomy already resolved,
+    // inflating Tier 1 with cases the model adds nothing to.
+    expect(uncovered).toEqual([]);
+  });
+});
+
 describe("Tier 0 resolver", () => {
   it("resolves the acceptance case with no model call", () => {
     const out = tier0.resolve({
@@ -121,12 +131,47 @@ describe("Tier 0 resolver", () => {
     expect(out.classification?.cause).toBe("insufficient_funds");
   });
 
-  it("escalates a known cause with no playbook for the domain", () => {
+  it("falls back to the cross-domain playbook when the domain has no specific one", () => {
+    // overdue_invoice has no otp_failure playbook of its own; the "*" entry
+    // covers it. Without the fallback this case would escalate to Tier 1 even
+    // though the taxonomy already classified it.
     const out = tier0.resolve({
       domain: "overdue_invoice",
       rail: "card",
       code: "OTP_FAILURE",
       attemptNo: 0,
+    });
+    expect(out.resolved).toBe(true);
+    if (!out.resolved) return;
+    expect(out.plan.ruleId).toBe("PB-ANY-005");
+  });
+
+  it("prefers a domain-specific playbook over the cross-domain default", () => {
+    const specific = tier0.resolve({
+      domain: "subscription_renewal", rail: "upi_autopay",
+      code: "INSUFFICIENT_FUNDS", attemptNo: 0,
+    });
+    expect(specific.resolved).toBe(true);
+    if (!specific.resolved) return;
+    expect(specific.plan.ruleId).toBe("PB-SUB-001");
+
+    const fallback = tier0.resolve({
+      domain: "checkout_abandonment", rail: "card",
+      code: "INSUFFICIENT_FUNDS", attemptNo: 0,
+    });
+    expect(fallback.resolved).toBe(true);
+    if (!fallback.resolved) return;
+    expect(fallback.plan.ruleId).toBe("PB-ANY-001");
+  });
+
+  it("still escalates a cause no playbook covers at all", () => {
+    // Reachable when a Tier 1 diagnosis names a cause outside the taxonomy.
+    const bare = new Tier0Resolver(
+      config.taxonomy,
+      parsePlaybooks("version: 1\nplaybooks: []\n", config.library),
+    );
+    const out = bare.resolve({
+      domain: "payment_failure", rail: "card", code: "EXPIRED_CARD", attemptNo: 0,
     });
     expect(out.resolved).toBe(false);
     if (out.resolved) return;

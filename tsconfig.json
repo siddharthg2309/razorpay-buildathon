@@ -6,6 +6,7 @@
     { "path": "./packages/connectors" },
     { "path": "./packages/engine" },
     { "path": "./packages/agents" },
-    { "path": "./packages/attribution" }
+    { "path": "./packages/attribution" },
+    { "path": "./packages/sim" }
   ]
 }
