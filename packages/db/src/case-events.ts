@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 import {
+  isTerminal,
   reduceAll,
   type CaseEvent,
   type CaseId,
@@ -55,6 +56,18 @@ export class CaseEventStore {
          WHERE id = $1`,
         [caseId, revision.state, revision.tier, revision.incidentId, revision.terminalReason, occurredAt],
       );
+
+      // Cancel-on-terminal, in the same transaction as the terminal write. If
+      // this were a separate call, a crash between the two would leave a closed
+      // case with live dunning steps still queued against it.
+      if (isTerminal(revision.state)) {
+        await client.query(
+          `UPDATE scheduled_actions
+              SET state = 'cancelled', settled_at = $2, lease_owner = NULL, lease_expiry = NULL
+            WHERE case_id = $1 AND state IN ('pending','leased')`,
+          [caseId, occurredAt],
+        );
+      }
 
       return { stored, revision };
     });
