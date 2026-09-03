@@ -153,17 +153,24 @@ export function estimate(
     .filter((o) => o.recovered)
     .reduce((s, o) => s + o.amountPaise, 0);
 
-  // The headline is the form architecture §10 specifies.
+  // The headline is the form architecture §10 specifies, and it stays that way
+  // on evidence rather than inertia.
   //
-  // A value-band-stratified variant was tried and made the point estimate
-  // worse, not better. The residual error is not a pricing problem: it is
-  // chance imbalance between the arms on an unobservable covariate — in the
-  // synthetic world, the share of customers who would have paid anyway differs
-  // between arms by ~2pp at this holdout size. Stratifying on value amplifies
-  // that imbalance rather than correcting it, and nothing observable can
-  // correct it. That is precisely what the confidence interval is for, so the
-  // simpler specified estimator is the headline and the stratified breakdown
-  // is kept as a diagnostic.
+  // Four estimators were compared against simulator ground truth across eight
+  // independent seeds (`npm run lab:sweep`):
+  //
+  //     pooled (this one)     17.1% mean abs error,  +3.2% bias
+  //     stratified by cause   20.2%                  -6.1%
+  //     stratified by band    22.3%                  -2.7%
+  //     cause x band          18.7%                 -12.1%
+  //
+  // cause x band looked like a 3.7% winner on a single seed and is the worst
+  // biased of the four across seeds — adopting it would have been fitting to
+  // one draw of noise. Post-stratification cannot help here because the error
+  // is dominated by chance imbalance between the arms on an *unobservable*
+  // covariate (who would have paid anyway), and reweighting on observables
+  // does not touch it. The lever that works is a larger holdout, not a cleverer
+  // estimator. The stratified figure stays as a diagnostic only.
   const strata = estimateByBand(treated, holdout, lift);
   const incrementalStratifiedPaise = Math.round(
     strata.reduce((sum, s) => sum + s.incrementalPaise, 0),

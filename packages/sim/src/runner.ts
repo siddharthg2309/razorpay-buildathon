@@ -278,7 +278,10 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       const sc = byId.get(r.caseId);
       if (!sc || closed.has(r.caseId)) continue;
 
-      const evId = `ev_reply_${r.caseId}_${elapsed}`;
+      // Two replies can land in the same tick — a customer answering twice
+      // within the hour is ordinary, and keying on the tick made it a primary
+      // key collision that killed the whole batch.
+      const evId = `ev_reply_${r.caseId}_${randomUUID().slice(0, 8)}`;
       await blackboard.addEvidence({
         id: evId, caseId: r.caseId, kind: "customer_reply",
         payload: { intent: r.intent, channel: "whatsapp" }, source: "customer",

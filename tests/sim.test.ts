@@ -211,3 +211,21 @@ describe("the agentic machinery actually runs", () => {
     expect(Number(bad[0]!.n)).toBe(0);
   }, 180_000);
 });
+
+describe("repeated customer replies", () => {
+  it("does not collide when a customer answers twice in the same tick", async () => {
+    // Keying reply evidence on the tick made a second reply within the hour a
+    // primary-key collision, which killed the entire batch rather than the case.
+    const chatty = {
+      ...small,
+      seed: 4242,
+      world: { ...small.world, replyRate: 0.9 },
+    };
+    await expect(runBatch({ scenario: chatty, arm: "full", provider: null }))
+      .resolves.toBeDefined();
+    const { rows } = await getPool().query<{ n: string }>(
+      "SELECT count(*) AS n FROM evidence WHERE kind = 'customer_reply'",
+    );
+    expect(Number(rows[0]!.n)).toBeGreaterThan(0);
+  }, 180_000);
+});

@@ -8,14 +8,27 @@ import { renderAblation, renderReport } from "./report.js";
 const path = process.argv[2] ?? "scenarios/demo.yaml";
 const ablate = process.argv.includes("--ablate");
 
-async function reset(): Promise<void> {
+/**
+ * Between ablation arms, everything except the attribution rows.
+ *
+ * The two arms reuse the same case ids, so the second would collide on the
+ * first. But wiping attribution_runs too would throw away the comparison the
+ * ablation exists to make.
+ */
+async function resetKeepingRuns(): Promise<void> {
   await getPool().query(
-    `TRUNCATE attribution_runs, incident_members, incidents, segment_windows, segment_baselines,
-              settlements, action_attempts, token_burns, capability_tokens, policy_decisions,
-              contact_budgets, claims, agent_runs, scheduled_actions, obligation_locks,
-              case_revisions, case_events, evidence, ledger, cases, obligations, customers,
-              merchants CASCADE`,
+    `TRUNCATE incident_members, incidents, segment_windows, segment_baselines,
+              promises_to_pay, checkout_sessions, settlements, action_attempts,
+              token_burns, capability_tokens, policy_decisions, contact_budgets,
+              claims, agent_runs, scheduled_actions, obligation_locks,
+              case_revisions, case_events, evidence, ledger, cases, obligations,
+              customers, merchants CASCADE`,
   );
+}
+
+async function reset(): Promise<void> {
+  await getPool().query("TRUNCATE attribution_runs CASCADE");
+  await resetKeepingRuns();
 }
 
 const scenario = loadScenario(path);
@@ -31,12 +44,17 @@ console.log(`running ${scenario.size} cases, seed ${scenario.seed}, holdout ${sc
 console.log(provider ? "provider: openai\n" : "provider: none — Tier 1 will run degraded\n");
 
 await reset();
-const full = await runBatch({ scenario, arm: "full", provider });
-console.log(renderReport(full));
 
-if (ablate) {
-  await reset();
+if (!ablate) {
+  const full = await runBatch({ scenario, arm: "full", provider });
+  console.log(renderReport(full));
+} else {
+  // Control first, full second. The full arm's cases are what the console and
+  // the per-case ablation read afterwards, so it has to be the one left standing.
   const control = await runBatch({ scenario, arm: "tier0_only", provider: null });
+  await resetKeepingRuns();
+  const full = await runBatch({ scenario, arm: "full", provider });
+  console.log(renderReport(full));
   console.log("\n" + renderAblation(full, control));
 }
 

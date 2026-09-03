@@ -31,6 +31,7 @@ const NAV = [
   ["/policy", "policy"],
   ["/attribution", "attribution"],
   ["/metrics", "metrics"],
+  ["/ablation", "ablation"],
   ["/stream", "stream"],
 ] as const;
 
