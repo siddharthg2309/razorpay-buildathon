@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
-  CapabilityMinter, VirtualClock, canTransition, hashParams, loadConfig, loadPolicy,
+  CapabilityMinter, RULES, VirtualClock, canTransition, hashParams, inQuietHours,
+  loadConfig, loadPolicy,
   type CaseState, type EngineConfig, type Policy,
 } from "@rra/core";
 import { CaseEventStore, Ledger, getPool } from "@rra/db";
@@ -14,6 +15,7 @@ import {
   AgentRuntime, ConstrainedOptimizer, DeliberationReducer, valueActions,
   type LLMProvider,
 } from "@rra/agents";
+import { IntentRouter, type CustomerIntent } from "@rra/engine";
 import { assignHoldout, estimate, stratumOf, trueIncremental, type CaseOutcome } from "@rra/attribution";
 import type { Scenario } from "./scenario.js";
 import { mulberry32 } from "@rra/attribution";
@@ -45,6 +47,12 @@ export interface BatchReport {
   degradedEscalations: number;
   incidentsOpened: number;
   casesParked: number;
+  optimizerDecisions: number;
+  playbookSubstitutions: number;
+  repliesInterpreted: number;
+  quietHoursDeferrals: number;
+  duplicatesSuppressed: number;
+  promisesResumed: number;
   errorSamples: string[];
   policyBlocks: Record<string, number>;
   terminalStates: Record<string, number>;
@@ -109,6 +117,7 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
   const detector = new AnomalyDetector(clock);
   const incidents = new IncidentManager(clock);
   const release = new ReleaseController(incidents, clock, undefined, scenario.seed);
+  const intents = new IntentRouter(verifier, clock);
   const reducer = new DeliberationReducer(opts.provider ?? null);
   const optimizer = new ConstrainedOptimizer(config.library);
 
@@ -134,12 +143,32 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
    */
   const pendingSettlements: { atMs: number; caseId: string; idemKey: string; amountPaise: number }[] = [];
   const settleRand = mulberry32(scenario.seed ^ 0xc0ffee);
+  /**
+   * Replies the agent's own contact provoked.
+   *
+   * These only exist because we reached out, so they cannot be seeded up front
+   * with the rest of the world — a reply in the holdout arm would be a customer
+   * answering a message nobody sent.
+   */
+  const pendingReplies: { atMs: number; caseId: string; intent: CustomerIntent }[] = [];
+  const replyRand = mulberry32(scenario.seed ^ 0xbadca11);
+  const drawIntent = (): CustomerIntent => {
+    const r = replyRand();
+    let acc = 0;
+    for (const [intent, weight] of Object.entries(scenario.world.replyIntents)) {
+      acc += weight;
+      if (r < acc) return intent as CustomerIntent;
+    }
+    return "unknown";
+  };
   /** Remaining plan steps per case — a plan is a sequence, not one action. */
   const remainingSteps = new Map<string, { actionId: string; params: Record<string, unknown> }[]>();
   const attemptNos = new Map<string, number>();
   const stats = {
     tier0: 0, tier1: 0, providerCalls: 0, executed: 0, planned: 0,
     stepErrors: 0, degraded: 0, incidentsOpened: 0, casesParked: 0,
+    optimized: 0, playbookSubstituted: 0, repliesInterpreted: 0,
+    rescheduledPastQuietHours: 0, duplicatesSuppressed: 0, promisesBroken: 0,
     errorSamples: [] as string[],
   };
 
@@ -236,6 +265,68 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
         });
         closed.add(ev.caseId);
         remainingSteps.delete(ev.caseId);
+      }
+    }
+
+    // Replies the agent provoked. Each one is new evidence, so it produces a
+    // new revision, and the work router invalidates exactly the claims whose
+    // declared dependencies moved — context and communication, not diagnosis.
+    for (let i = pendingReplies.length - 1; i >= 0; i--) {
+      const r = pendingReplies[i]!;
+      if (r.atMs > elapsed) continue;
+      pendingReplies.splice(i, 1);
+      const sc = byId.get(r.caseId);
+      if (!sc || closed.has(r.caseId)) continue;
+
+      const evId = `ev_reply_${r.caseId}_${elapsed}`;
+      await blackboard.addEvidence({
+        id: evId, caseId: r.caseId, kind: "customer_reply",
+        payload: { intent: r.intent, channel: "whatsapp" }, source: "customer",
+      });
+      const { revision } = await events.append(
+        r.caseId, { type: "evidence_added", kind: "customer_reply", evidenceId: evId }, "customer",
+      );
+      const decision = await router.route(revision);
+      stats.repliesInterpreted++;
+      await ledger.append({
+        caseId: r.caseId, actor: "work_router", eventType: "claims_invalidated",
+        payload: { rerun: decision.rerun, reused: decision.reused, changed: decision.changedKinds },
+      });
+
+      // The enum is the only thing the customer's text can influence; this is
+      // the deterministic code that decides what it means.
+      const outcome = await intents.route(r.intent, {
+        caseId: r.caseId, obligationId: sc.obligationId, amountPaise: sc.amountPaise,
+      });
+      if (outcome.action === "terminal") {
+        closed.add(r.caseId);
+        remainingSteps.delete(r.caseId);
+      } else if (outcome.action === "record_promise") {
+        // A promise pauses chasing until its date. It is not money.
+        remainingSteps.delete(r.caseId);
+      }
+    }
+    // A promise that passed its date without money is broken, and collection
+    // resumes. Leaving it stopped would let one unfulfilled sentence from a
+    // customer end recovery permanently.
+    const promises = await intents.reconcilePromises();
+    if (promises.broken > 0) {
+      const { rows: brokenRows } = await getPool().query<{ case_id: string }>(
+        `SELECT case_id FROM promises_to_pay WHERE state = 'broken' AND settled_at = $1`,
+        [clock.now()],
+      );
+      for (const b of brokenRows) {
+        const sc = byId.get(b.case_id);
+        if (!sc || closed.has(b.case_id) || remainingSteps.has(b.case_id)) continue;
+        const resume = genericFallback(sc);
+        if (resume) {
+          stats.promisesBroken++;
+          await ledger.append({
+            caseId: b.case_id, actor: "intent_router", eventType: "collection_resumed",
+            payload: { reason: "promise_broken", action: resume },
+          });
+          await startPlan(sc, [{ actionId: resume, params: defaultParams(resume, sc) }], 0);
+        }
       }
     }
 
@@ -409,6 +500,11 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
     providerCalls: stats.providerCalls, actionsExecuted: stats.executed,
     stepErrors: stats.stepErrors, degradedEscalations: stats.degraded,
     incidentsOpened: stats.incidentsOpened, casesParked: stats.casesParked,
+    optimizerDecisions: stats.optimized, playbookSubstitutions: stats.playbookSubstituted,
+    repliesInterpreted: stats.repliesInterpreted,
+    quietHoursDeferrals: stats.rescheduledPastQuietHours,
+    duplicatesSuppressed: stats.duplicatesSuppressed,
+    promisesResumed: stats.promisesBroken,
     errorSamples: stats.errorSamples,
     policyBlocks: await policyEngine.blockCountsByRule(),
     terminalStates,
@@ -453,7 +549,58 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
         },
         evidenceRefs: [evidenceId],
       });
-      await recordDiagnosis(sc, outcome.classification.cause);
+      await recordDiagnosis(sc, outcome.classification.cause, 0);
+
+      // Record the customer context the plan was built on, even though Tier 0
+      // derived it deterministically.
+      //
+      // Without this the blackboard holds only a diagnosis, so when a reply
+      // arrives there is no stale context claim to invalidate and the reactive
+      // loop has nothing to do — the router correctly reruns nothing, and the
+      // architecture's central mechanism never fires on the 95% of cases Tier 0
+      // handles.
+      await blackboard.writeClaim({
+        id: randomUUID(),
+        caseId: sc.caseId,
+        revision: 1,
+        role: "customer_context",
+        payload: { intent: "unknown", optedOut: false, language: "en", priorContacts: 0, tier: 0 },
+        evidenceRefs: [evidenceId],
+      });
+
+      // Score the whole permitted library, even though a playbook already has
+      // an answer.
+      //
+      // Two reasons. First, explainability: "we chose X, here is what else was
+      // scored and why it lost" is only true if something else was actually
+      // scored, and running the optimizer on Tier 1 alone made that claim
+      // apply to none of this batch. Second, recovery: the playbook's first
+      // step is sometimes an action policy forbids on this rail, and that used
+      // to kill the plan outright. Now the best permitted candidate takes over.
+      const permitted = (policy.allowedActions[sc.rail] ?? []) as string[];
+      const economics = valueActions(
+        specialistInput(sc, evidenceId), config.library,
+        outcome.classification.cause, permitted,
+      );
+      const ranked = optimizer.rank(economics.claim.candidates, {
+        permitted, priorContacts: 0, modelSpendPaise: 0,
+      });
+
+      // The playbook keeps authority over the sequence: it encodes ordering the
+      // optimizer cannot see, like a pre-debit notification preceding a debit,
+      // or never retrying a revoked mandate. Expected value must not override
+      // a rule written for a regulator.
+      const first = outcome.plan.steps[0];
+      const playbookPermitted = first ? permitted.includes(first.actionId) : false;
+      const steps = playbookPermitted
+        ? outcome.plan.steps.map((st) => ({ actionId: st.actionId, params: st.params }))
+        : ranked.selected
+          ? [{ actionId: ranked.selected.actionId, params: defaultParams(ranked.selected.actionId, sc) }]
+          : [];
+
+      stats.optimized++;
+      if (!playbookPermitted && ranked.selected) stats.playbookSubstituted++;
+
       await ledger.append({
         caseId: sc.caseId, actor: "tier0", eventType: "plan_selected",
         payload: {
@@ -463,7 +610,18 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
           tier: 0,
         },
       });
-      await startPlan(sc, outcome.plan.steps.map((st) => ({ actionId: st.actionId, params: st.params })), 0, startDelayMs);
+      await ledger.append({
+        caseId: sc.caseId, actor: "optimizer", eventType: "plan_optimized",
+        payload: {
+          chosen: steps[0]?.actionId ?? null,
+          chosenBy: playbookPermitted ? "playbook" : "optimizer_substitution",
+          playbookAction: first?.actionId ?? null,
+          ranked: ranked.ranked.map((r) => ({ actionId: r.actionId, ev: r.expectedValuePaise, rank: r.rank })),
+          rejected: ranked.rejected,
+        },
+      });
+
+      await startPlan(sc, steps, 0, startDelayMs);
       return;
     }
 
@@ -503,7 +661,7 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       // stop safely. A provider outage must never manufacture a generic
       // recovery action, but it must not silently drop the case either.
       stats.degraded++;
-      await recordDiagnosis(sc, "undiagnosed_degraded");
+      await recordDiagnosis(sc, "undiagnosed_degraded", 2);
       await ledger.append({
         caseId: sc.caseId, actor: "runtime", eventType: "degraded_escalation",
         payload: { degraded: true, reason: "no diagnosis claim available", tier: 2 },
@@ -521,7 +679,7 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       context: run.claims.context ?? { intent: "unknown", optedOut: false, language: "en", priorContacts: 0 },
       incident: run.claims.incident ?? { attach: false, incidentId: null, suppress: false, rationale: "" },
     });
-    await recordDiagnosis(sc, strategy.selectedCause);
+    await recordDiagnosis(sc, strategy.selectedCause, 1);
     if (strategy.suppress || strategy.stopReason) return;
 
     const economics = valueActions(
@@ -621,15 +779,81 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       rail: sc.rail, actionId, params, attemptNo,
       ...(action.amountCapped ? { amountPaise: sc.amountPaise } : {}),
     });
-    // A blocked step ends the sequence: the rule that blocked it would block
-    // the rest too, and continuing would just burn the retry cap.
+    // A block is not one outcome, it is several, and treating them alike threw
+    // away recoverable cases. What to do next depends on *why* policy refused.
     if (!auth.token) {
+      const rule = auth.decision.ruleId;
+
+      if (rule === RULES.ACTION_NOT_ALLOWED_ON_RAIL) {
+        // The action is wrong for this rail, not the case. Ask the optimizer
+        // for the best candidate that *is* permitted and carry on.
+        const permitted = (policy.allowedActions[sc.rail] ?? []) as string[];
+        const econ = valueActions(
+          specialistInput(sc, `ev_${sc.caseId}`), config.library,
+          sc.cause, permitted,
+        );
+        const alt = optimizer.rank(econ.claim.candidates, {
+          permitted, priorContacts: attemptNo, modelSpendPaise: 0,
+        }).selected;
+        if (alt && alt.actionId !== actionId) {
+          stats.playbookSubstituted++;
+          await ledger.append({
+            caseId: sc.caseId, actor: "optimizer", eventType: "action_substituted",
+            payload: { blocked: actionId, rule, substituted: alt.actionId, ev: alt.expectedValuePaise },
+          });
+          remainingSteps.set(sc.caseId, [
+            { actionId: alt.actionId, params: defaultParams(alt.actionId, sc) },
+            ...(remainingSteps.get(sc.caseId) ?? []),
+          ]);
+          await advancePlan(sc, 0);
+          return;
+        }
+      }
+
+      if (rule === RULES.QUIET_HOURS) {
+        // Quiet hours are a timing constraint, not a verdict on the action.
+        // Killing the plan here silently converts a compliance rule into lost
+        // revenue; the right response is to wait until contact is permitted.
+        stats.rescheduledPastQuietHours++;
+        await ledger.append({
+          caseId: sc.caseId, actor: "policy_engine", eventType: "deferred_for_quiet_hours",
+          payload: { actionId, until: policy.quietHours.end },
+        });
+        remainingSteps.set(sc.caseId, [
+          { actionId, params },
+          ...(remainingSteps.get(sc.caseId) ?? []),
+        ]);
+        await advancePlan(sc, msUntilContactAllowed());
+        return;
+      }
+
+      // Retry cap, contact budget, opt-out, approval: these are verdicts. The
+      // case stops, which is the stopping rule doing its job.
       remainingSteps.delete(sc.caseId);
       return;
     }
 
     // The policy allow *is* the approval, so record it: without this the case
     // jumps SCHEDULED -> OBSERVING, which the state machine rejects outright.
+    //
+    // A case can be sitting in OBSERVING when its next action fires — an
+    // earlier attempt settled, or a reply arrived after it. EXECUTING is not
+    // reachable from there, and it should not be: the action is scheduled and
+    // now firing, so say that first rather than teaching the state machine a
+    // shortcut it should not have.
+    const { rows: pre } = await getPool().query<{ state: CaseState }>(
+      "SELECT state FROM cases WHERE id = $1", [sc.caseId],
+    );
+    const state = pre[0]?.state;
+    if (!state) return;
+    if (!canTransition(state, "EXECUTING")) {
+      if (!canTransition(state, "SCHEDULED")) return; // terminal or suppressed
+      await events.append(
+        sc.caseId,
+        { type: "action_scheduled", actionId, fireAt: clock.now().toISOString() },
+        "runner",
+      );
+    }
     await events.append(sc.caseId, { type: "approval_granted", approver: "policy_engine" }, "policy_engine");
 
     try {
@@ -640,6 +864,14 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       });
       stats.executed++;
       attemptNos.set(sc.caseId, attemptNo + 1);
+      if (action.consumesContactBudget && replyRand() < scenario.world.replyRate) {
+        // People answer hours later, not instantly.
+        pendingReplies.push({
+          atMs: elapsed + Math.floor((1 + replyRand() * 30) * HOUR),
+          caseId: sc.caseId,
+          intent: drawIntent(),
+        });
+      }
       await events.append(sc.caseId, { type: "action_executed", actionId, attemptNo }, "executor");
       if (action.consumesContactBudget) {
         await policyEngine.consumeContactBudget(sc.customerId, String(params["channel"] ?? "sms"));
@@ -667,6 +899,14 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       // A refused or failed step ends this case's sequence; the batch continues.
       // Counted and sampled rather than swallowed: a bare catch here hid an
       // illegal-transition bug for a whole run.
+      // A duplicate attempt is the idempotency guard doing its job, not a
+      // fault: the same action was already tried for this case at this attempt
+      // number. Skip it and carry on with the rest of the plan.
+      if ((err as Error).name === "DuplicateAttemptError") {
+        stats.duplicatesSuppressed++;
+        await advancePlan(sc, 0);
+        return;
+      }
       stats.stepErrors++;
       if (stats.errorSamples.length < 5) stats.errorSamples.push((err as Error).message);
       remainingSteps.delete(sc.caseId);
@@ -682,11 +922,32 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
   }
 
   /** Denormalise the diagnosis onto the case so breakdowns are a plain query. */
-  async function recordDiagnosis(sc: SyntheticCase, cause: string): Promise<void> {
+  async function recordDiagnosis(sc: SyntheticCase, cause: string, tier: number): Promise<void> {
     await getPool().query(
-      "UPDATE cases SET cause = $2, rail = $3, gateway = $4, issuer = $5 WHERE id = $1",
-      [sc.caseId, cause, sc.rail, sc.gateway, sc.issuer],
+      "UPDATE cases SET cause = $2, rail = $3, gateway = $4, issuer = $5, tier = $6 WHERE id = $1",
+      [sc.caseId, cause, sc.rail, sc.gateway, sc.issuer, tier],
     );
+  }
+
+  /** How long until the merchant's quiet hours end. */
+  function msUntilContactAllowed(): number {
+    let ms = 0;
+    // Step forward in hours rather than doing timezone arithmetic by hand:
+    // the policy owns the timezone and the wrap over midnight, and duplicating
+    // that logic here is how the two drift apart.
+    while (ms < 24 * HOUR) {
+      ms += HOUR;
+      if (!inQuietHours(new Date(clock.now().getTime() + ms), policy)) return ms;
+    }
+    return HOUR;
+  }
+
+  function specialistInput(sc: SyntheticCase, evidenceId: string, priorContacts = 0) {
+    return {
+      caseId: sc.caseId, domain: sc.domain, rail: sc.rail, code: sc.code, attemptNo: 0,
+      amountPaise: sc.amountPaise, evidenceRefs: [evidenceId], priorContacts,
+      optedOut: false, language: "en" as const,
+    };
   }
 
   async function currentRevision(caseId: string) {

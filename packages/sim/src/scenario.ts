@@ -24,6 +24,8 @@ export interface Scenario {
     fundsClearAfterHours: number;
     optOutRate: number;
     disputeRate: number;
+    replyRate: number;
+    replyIntents: Record<string, number>;
   };
   holdout: number;
   windowDays: number;
@@ -43,7 +45,7 @@ export function parseScenario(source: string): Scenario {
     causes: Record<string, number>;
     value_distribution: { mu: number; sigma: number };
   };
-  const world = raw["world"] as unknown as Record<string, number>;
+  const world = raw["world"] as unknown as Record<string, number | Record<string, number>>;
   const measurement = raw["measurement"] as unknown as Record<string, number>;
 
   // A distribution that does not sum to 1 silently reweights the cohort, so it
@@ -68,11 +70,13 @@ export function parseScenario(source: string): Scenario {
     causes: cohort.causes,
     valueDistribution: cohort.value_distribution,
     world: {
-      naturalRecoveryRate: world["natural_recovery_rate"]!,
-      respondsToLink: world["responds_to_link"]!,
-      fundsClearAfterHours: world["funds_clear_after_hours"]!,
-      optOutRate: world["opt_out_rate"]!,
-      disputeRate: world["dispute_rate"]!,
+      naturalRecoveryRate: world["natural_recovery_rate"] as number,
+      respondsToLink: world["responds_to_link"] as number,
+      fundsClearAfterHours: world["funds_clear_after_hours"] as number,
+      optOutRate: world["opt_out_rate"] as number,
+      disputeRate: world["dispute_rate"] as number,
+      replyRate: (world["reply_rate"] as unknown as number) ?? 0,
+      replyIntents: (world["reply_intents"] as unknown as Record<string, number>) ?? {},
     },
     holdout: raw["holdout"] as unknown as number,
     windowDays: measurement["window_days"]!,

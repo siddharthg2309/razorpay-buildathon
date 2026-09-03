@@ -49,6 +49,19 @@ world:
   opt_out_rate: 0.02
   dispute_rate: 0.01
 
+  # Customers answer. This is what makes the reactive loop real: a reply is new
+  # evidence, which produces a new case revision, which invalidates exactly the
+  # claims that depended on customer facts and reruns only those roles. Without
+  # replies the work router has nothing to route and the intent path never runs.
+  reply_rate: 0.22
+  reply_intents:
+    will_pay: 0.34        # a promise — evidence, never recovered money
+    will_update: 0.28
+    missing_po: 0.14      # B2B: pause collection and ask for the PO
+    dispute: 0.08
+    opt_out: 0.10
+    unknown: 0.06
+
 holdout: 0.20
 
 measurement:

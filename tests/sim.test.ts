@@ -166,3 +166,48 @@ describe("batch runner", () => {
     expect(text).toContain("interval contains ground truth");
   }, 120_000);
 });
+
+describe("the agentic machinery actually runs", () => {
+  /**
+   * These assert exercise, not existence.
+   *
+   * Every mechanism below was built and unit-tested and then ran zero times in
+   * the demo batch, because the scenario never produced the workload it needed.
+   * A component that only works in its own test is not part of the product.
+   */
+  it("exercises the optimizer, reactive loop and intent path on a real batch", async () => {
+    const report = await runBatch({ scenario: small, arm: "full", provider: null });
+
+    // Explainable next-best action, on every case rather than the Tier 1 few.
+    expect(report.optimizerDecisions).toBeGreaterThan(0);
+
+    // The reactive loop: a reply is new evidence, and exactly the roles that
+    // declared a dependency on customer facts get invalidated.
+    expect(report.repliesInterpreted).toBeGreaterThan(0);
+    const { rows: invalidated } = await getPool().query<{ n: string }>(
+      "SELECT count(*) AS n FROM claims WHERE status = 'invalidated'",
+    );
+    expect(Number(invalidated[0]!.n)).toBeGreaterThan(0);
+
+    // A blocked action is not one outcome. Wrong-rail substitutes, quiet hours
+    // defers, and the verdicts stop.
+    expect(report.playbookSubstitutions + report.quietHoursDeferrals).toBeGreaterThan(0);
+  }, 180_000);
+
+  it("records promises as evidence and resumes collection when they break", async () => {
+    await runBatch({ scenario: small, arm: "full", provider: null });
+    const { rows } = await getPool().query<{ state: string; n: string }>(
+      "SELECT state, count(*) AS n FROM promises_to_pay GROUP BY state",
+    );
+    const byState = Object.fromEntries(rows.map((r) => [r.state, Number(r.n)]));
+    expect((byState["kept"] ?? 0) + (byState["broken"] ?? 0)).toBeGreaterThan(0);
+
+    // A promise never closes a case on its own — only matched money does.
+    const { rows: bad } = await getPool().query<{ n: string }>(
+      `SELECT count(*) AS n FROM cases c
+        WHERE c.state = 'RECOVERED'
+          AND NOT EXISTS (SELECT 1 FROM settlements s WHERE s.obligation_id = c.obligation_id)`,
+    );
+    expect(Number(bad[0]!.n)).toBe(0);
+  }, 180_000);
+});

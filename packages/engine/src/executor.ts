@@ -46,6 +46,21 @@ export interface ExecuteResult {
   result: CallResult;
 }
 
+/**
+ * The unique index on idem_key caught a repeat of an attempt already made.
+ *
+ * This is the idempotency guard working, not a failure: something asked for the
+ * same action, on the same case, at the same attempt number, with the same
+ * params. Distinguishing it from a real error matters, because the caller
+ * should move on rather than treat the case as broken.
+ */
+export class DuplicateAttemptError extends Error {
+  constructor(readonly idemKey: string) {
+    super(`attempt ${idemKey.slice(0, 12)}… already exists; refusing to repeat it`);
+    this.name = "DuplicateAttemptError";
+  }
+}
+
 export class ScheduleActionNotExecutableError extends Error {
   constructor(actionId: string) {
     super(`${actionId} is a schedule action: it writes a scheduled_actions row, not a connector call`);
@@ -96,15 +111,20 @@ export class Executor {
       // Step 4: burning the nonce. A replayed token dies here, before the call.
       await this.burner.burn(req.token);
 
-      await getPool().query(
-        `INSERT INTO action_attempts
-           (id, case_id, obligation_id, action_id, attempt_no, idem_key, surface, state, request, sent_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,'in_flight',$8,$9)`,
-        [
-          idemKey, req.caseId, req.obligationId, req.actionId, req.attemptNo, idemKey,
-          this.adapter.surface, JSON.stringify(req.params), this.clock.now(),
-        ],
-      );
+      try {
+        await getPool().query(
+          `INSERT INTO action_attempts
+             (id, case_id, obligation_id, action_id, attempt_no, idem_key, surface, state, request, sent_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'in_flight',$8,$9)`,
+          [
+            idemKey, req.caseId, req.obligationId, req.actionId, req.attemptNo, idemKey,
+            this.adapter.surface, JSON.stringify(req.params), this.clock.now(),
+          ],
+        );
+      } catch (err) {
+        if ((err as { code?: string }).code === "23505") throw new DuplicateAttemptError(idemKey);
+        throw err;
+      }
 
       try {
         const result = await invoke(
