@@ -55,6 +55,7 @@ export function renderReport(r: BatchReport): string {
     ["quiet-hr deferrals", r.quietHoursDeferrals],
     ["dup attempts blocked", r.duplicatesSuppressed],
     ["promises resumed", r.promisesResumed],
+    ["mandate sequences", r.mandateSequences],
     ["actions executed", r.actionsExecuted],
   ] as const;
   for (let i = 0; i < Math.max(tiers.length, terminals.length); i++) {

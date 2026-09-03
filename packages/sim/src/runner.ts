@@ -7,9 +7,9 @@ import {
 import { CaseEventStore, Ledger, getPool } from "@rra/db";
 import { SimulatedPSP, type LatentCustomer } from "@rra/connectors";
 import {
-  AnomalyDetector, Blackboard, CaseManager, Executor, IncidentManager, ObligationLease,
-  PolicyEngine, Reconciler, ReleaseController, Scheduler, Tier0Resolver, TokenBurner,
-  Verifier, WorkRouter, segmentLabel, type SegmentKey, type SegmentObservation,
+  AnomalyDetector, Blackboard, CaseManager, Executor, IncidentManager, MandateRetrySequencer,
+  ObligationLease, PolicyEngine, Reconciler, ReleaseController, Scheduler, Tier0Resolver,
+  TokenBurner, Verifier, WorkRouter, segmentLabel, type SegmentKey, type SegmentObservation,
 } from "@rra/engine";
 import {
   AgentRuntime, ConstrainedOptimizer, DeliberationReducer, valueActions,
@@ -53,6 +53,7 @@ export interface BatchReport {
   quietHoursDeferrals: number;
   duplicatesSuppressed: number;
   promisesResumed: number;
+  mandateSequences: number;
   errorSamples: string[];
   policyBlocks: Record<string, number>;
   terminalStates: Record<string, number>;
@@ -118,6 +119,7 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
   const incidents = new IncidentManager(clock);
   const release = new ReleaseController(incidents, clock, undefined, scenario.seed);
   const intents = new IntentRouter(verifier, clock);
+  const mandates = new MandateRetrySequencer(clock, config.taxonomy);
   const reducer = new DeliberationReducer(opts.provider ?? null);
   const optimizer = new ConstrainedOptimizer(config.library);
 
@@ -169,6 +171,7 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
     stepErrors: 0, degraded: 0, incidentsOpened: 0, casesParked: 0,
     optimized: 0, playbookSubstituted: 0, repliesInterpreted: 0,
     rescheduledPastQuietHours: 0, duplicatesSuppressed: 0, promisesBroken: 0,
+    mandateSequenced: 0,
     errorSamples: [] as string[],
   };
 
@@ -508,6 +511,7 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
     quietHoursDeferrals: stats.rescheduledPastQuietHours,
     duplicatesSuppressed: stats.duplicatesSuppressed,
     promisesResumed: stats.promisesBroken,
+    mandateSequences: stats.mandateSequenced,
     errorSamples: stats.errorSamples,
     policyBlocks: await policyEngine.blockCountsByRule(),
     terminalStates,
@@ -605,11 +609,45 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       // a rule written for a regulator.
       const first = outcome.plan.steps[0];
       const playbookPermitted = first ? permitted.includes(first.actionId) : false;
-      const steps = playbookPermitted
-        ? outcome.plan.steps.map((st) => ({ actionId: st.actionId, params: st.params }))
-        : ranked.selected
-          ? [{ actionId: ranked.selected.actionId, params: defaultParams(ranked.selected.actionId, sc) }]
-          : [];
+
+      // On a mandate rail the ordering is regulatory, not a preference, so the
+      // sequencer decides it rather than a static playbook: notice before
+      // debit, no debit at all on a revoked or paused mandate, and the bank's
+      // presentation cycle rather than a delay we picked.
+      let sequenced: { actionId: string; params: Record<string, unknown> }[] | null = null;
+      if (sc.rail === "upi_autopay" || sc.rail === "enach") {
+        const plan = mandates.sequence({
+          rail: sc.rail,
+          state: sc.latent.mandateState === "revoked" ? "revoked"
+               : sc.latent.mandateState === "paused" ? "paused" : "active",
+          capPaise: sc.ambiguous?.mandateCapPaise ?? null,
+          amountPaise: sc.amountPaise,
+          preDebitNotifiedAt: null,
+          attemptNo: 0,
+          nextPresentationAt: null,
+        });
+        const usable = plan.steps.filter((st) => permitted.includes(st.actionId));
+        if (usable.length > 0) {
+          sequenced = usable.map((st) => ({ actionId: st.actionId, params: st.params }));
+          stats.mandateSequenced++;
+          await ledger.append({
+            caseId: sc.caseId, actor: "mandate_sequencer", eventType: "mandate_sequenced",
+            payload: {
+              permitted: plan.permitted,
+              blockedBy: plan.blockedBy,
+              steps: plan.steps.map((st) => ({ action: st.actionId, because: st.because })),
+            },
+          });
+        }
+      }
+
+      const steps = sequenced
+        ? sequenced
+        : playbookPermitted
+          ? outcome.plan.steps.map((st) => ({ actionId: st.actionId, params: st.params }))
+          : ranked.selected
+            ? [{ actionId: ranked.selected.actionId, params: defaultParams(ranked.selected.actionId, sc) }]
+            : [];
 
       stats.optimized++;
       if (!playbookPermitted && ranked.selected) stats.playbookSubstituted++;

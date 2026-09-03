@@ -129,6 +129,8 @@ playbooks:
       - { action: wait, params: { delay_hours: 48, reason: awaiting_payday } }
       - { action: create_payment_link, params: { expiry_hours: 72 } }
       - { action: send_approved_template, params: { template_id: WA_FUNDS_REMINDER } }
+      # Last, in the customer's own language, once text has not landed.
+      - { action: place_approved_voice_call, params: { script_id: VO_FUNDS_REMINDER, language: hinglish, channel: voice } }
     stop_conditions: [paid, opted_out, attempt_ceiling]
 
   - domain: "*"
@@ -243,6 +245,9 @@ playbooks:
     steps:
       - { action: send_approved_template, params: { template_id: EM_INVOICE_DUE } }
       - { action: wait, params: { delay_hours: 96, reason: bank_presentation_cycle } }
+      # Accounts payable answer the phone when they ignore email. Voice comes
+      # after text has had its turn, never instead of it.
+      - { action: place_approved_voice_call, params: { script_id: VO_INVOICE_DUE, language: en, channel: voice } }
       - { action: await_provider_retry, params: { expected_at_hours: 120 } }
     stop_conditions: [paid, opted_out, disputed]
 

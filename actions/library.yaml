@@ -111,6 +111,35 @@ actions:
         mandate_cap_breach: 0.14
     stop_conditions: [paid, opted_out, contact_budget_exhausted, attempt_ceiling]
 
+  - id: place_approved_voice_call
+    kind: capability
+    capability: sendApprovedTemplate
+    surface: simulated
+    description: >
+      Outbound voice reminder on an approved script, in the customer's own
+      language. Reaches people who ignore text — which in India is a large share
+      of the recoverable population — but it is a contact like any other: it
+      spends the same shared budget, obeys the same quiet hours, and carries the
+      same opt-out. A voice channel that escapes those limits is not a feature,
+      it is a compliance incident.
+    rails: [card, upi_collect, upi_autopay, enach, netbanking, wallet]
+    params:
+      script_id: { type: string, required: true }
+      language: { type: string, enum: [en, hi, hinglish], required: true }
+      slots: { type: object, required: true }
+      channel: { type: string, enum: [voice], required: true }
+    consumes_contact_budget: true
+    quiet_hours_enforced: true
+    action_cost_paise: 180        # a call costs more than a message, and the
+                                  # optimizer should feel that
+    p_recover:
+      default: 0.21
+      by_cause:
+        insufficient_funds: 0.24
+        mandate_revoked: 0.19
+        presentation_failed: 0.28   # B2B accounts payable answer the phone
+    stop_conditions: [paid, opted_out, contact_budget_exhausted, attempt_ceiling]
+
   - id: create_ops_escalation
     kind: capability
     capability: createOpsEscalation

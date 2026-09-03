@@ -20,6 +20,9 @@ contact_caps:
   - { channel: sms,      window_days: 7, max: 2 }
   - { channel: whatsapp, window_days: 7, max: 3 }
   - { channel: email,    window_days: 7, max: 5 }
+  # Voice is the most intrusive channel, so it gets the tightest cap. It still
+  # draws on the shared "*" budget, so a call is not a free extra contact.
+  - { channel: voice,    window_days: 7, max: 1 }
   - { channel: "*",      window_days: 7, max: 6 }
 
 retry_caps:
@@ -32,10 +35,10 @@ amount_thresholds:
 # Per-rail allow-list. An action absent here is blocked even if the library
 # defines it and the connector supports it.
 allowed_actions:
-  card:         [create_payment_link, request_payment_method_update, send_approved_template, create_ops_escalation, wait, resume_checkout]
-  upi_collect:  [create_payment_link, send_approved_template, create_ops_escalation, wait, resume_checkout]
-  upi_autopay:  [request_payment_method_update, send_approved_template, create_ops_escalation, wait, await_provider_retry, await_mandate_prerequisite]
-  enach:        [request_payment_method_update, send_approved_template, create_ops_escalation, wait, await_provider_retry, await_mandate_prerequisite]
-  netbanking:   [create_payment_link, send_approved_template, create_ops_escalation, wait, resume_checkout]
-  wallet:       [create_payment_link, send_approved_template, create_ops_escalation, wait]
+  card:         [create_payment_link, request_payment_method_update, send_approved_template, create_ops_escalation, wait, resume_checkout, place_approved_voice_call]
+  upi_collect:  [create_payment_link, send_approved_template, create_ops_escalation, wait, resume_checkout, place_approved_voice_call]
+  upi_autopay:  [request_payment_method_update, send_approved_template, create_ops_escalation, wait, await_provider_retry, await_mandate_prerequisite, place_approved_voice_call]
+  enach:        [request_payment_method_update, send_approved_template, create_ops_escalation, wait, await_provider_retry, await_mandate_prerequisite, place_approved_voice_call]
+  netbanking:   [create_payment_link, send_approved_template, create_ops_escalation, wait, resume_checkout, place_approved_voice_call]
+  wallet:       [create_payment_link, send_approved_template, create_ops_escalation, wait, place_approved_voice_call]
   smart_collect: [create_ops_escalation, wait]
