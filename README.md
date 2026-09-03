@@ -180,10 +180,17 @@ npm run live-case    # opens a case, mints a token, creates a REAL test-mode
                      # link, and polls until the money arrives
 ```
 
-`live-case` prints an `rzp.io` URL. Open it, pay with a Razorpay test
-instrument (card `4111 1111 1111 1111`, any future expiry and CVV, or UPI id
-`success@razorpay` — check Razorpay's test-card docs if these have moved), and
-the case closes to `RECOVERED` on a verified capture. Then open
+`live-case` prints an `rzp.io` URL. Open it and pay with a test instrument:
+
+- **Netbanking** — pick any bank, then tap **Success** on the mock bank page.
+  This is the reliable one: no card-network classification, settles immediately.
+- **UPI** — VPA `success@razorpay`.
+- **Cards** — needs a *domestic* Indian test card. Generic numbers like
+  `4111 1111 1111 1111` are classified international and rejected, because
+  international cards are disabled by default on test accounts. Current domestic
+  numbers are at `razorpay.com/docs/payments/payments/test-card-details/`.
+
+The case closes to `RECOVERED` on a verified capture. Then open
 `http://localhost:4000/case/<id>` to read the trail: policy rule, capability
 token, burned nonce, live attempt, settlement, terminal state.
 
