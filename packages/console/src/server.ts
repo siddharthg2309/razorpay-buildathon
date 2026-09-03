@@ -8,6 +8,7 @@ import { attributionScreen } from "./screens/attribution.js";
 import { metricsScreen } from "./screens/metrics.js";
 import { streamScreen } from "./screens/stream.js";
 import { sse } from "./stream.js";
+import { handleWebhook } from "./webhook-route.js";
 import { page, panel } from "./render.js";
 
 const PORT = Number(process.env["PORT"] ?? 4000);
@@ -18,6 +19,15 @@ const server = createServer((req, res) => {
     const path = url.pathname;
 
     try {
+      if (path === "/webhook") {
+        if (req.method !== "POST") {
+          res.writeHead(405).end("POST only");
+          return;
+        }
+        await handleWebhook(req, res);
+        return;
+      }
+
       if (path === "/events") {
         const close = sse(res, Number(url.searchParams.get("after") ?? 0));
         req.on("close", close);

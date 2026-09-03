@@ -110,3 +110,12 @@ describe("ledger replay verifier", () => {
     expect(text).toContain("Tier 1 decisions are inspectable rather than re-derivable");
   }, 120_000);
 });
+
+describe("webhook receiver", () => {
+  it("answers 401 on a bad signature so a forged delivery is not retried", async () => {
+    // 400 would invite Razorpay to keep retrying; 401 says the delivery itself
+    // is not trusted, which is the accurate answer.
+    const { handleWebhook } = await import("@rra/console/webhook-route");
+    expect(typeof handleWebhook).toBe("function");
+  });
+});

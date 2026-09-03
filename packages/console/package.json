@@ -6,11 +6,13 @@
   "main": "./src/server.ts",
   "dependencies": {
     "@rra/core": "*",
-    "@rra/db": "*"
+    "@rra/db": "*",
+    "@rra/connectors": "*"
   },
   "exports": {
     ".": "./src/server.ts",
     "./stream": "./src/stream.ts",
-    "./screens/*": "./src/screens/*.ts"
+    "./screens/*": "./src/screens/*.ts",
+    "./webhook-route": "./src/webhook-route.ts"
   }
 }

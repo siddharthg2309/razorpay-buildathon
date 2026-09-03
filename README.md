@@ -154,12 +154,34 @@ Tier 1 falls into degraded mode and escalates to a human rather than
 manufacturing a generic action, and the ablation reports that it cannot measure
 anything rather than printing a meaningless delta.
 
-Razorpay Test Mode (`RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`,
-`RAZORPAY_WEBHOOK_SECRET`) is needed only for the one live case. Run
-`npm run preflight` first — it refuses a non-`rzp_test_` key, checks the
-credentials create a real link, and verifies that a forged webhook signature is
-rejected. Point the webhook at `/webhook` and subscribe to `payment_link.paid`,
-`payment.failed`, and `payment.downtime.*`.
+### Razorpay Test Mode
+
+Needed only for the one live case.
+
+1. Sign up or log in at **dashboard.razorpay.com**. Test Mode needs no KYC —
+   only Live Mode does.
+2. Switch the dashboard toggle to **Test Mode**. Everything below must be done
+   with that toggle on, or you will generate live credentials.
+3. **Settings → API Keys → Generate Test Key.** The Key ID looks like
+   `rzp_test_XXXXXXXX`. The secret is shown **once** — copy it now.
+4. **Settings → Webhooks → Add New Webhook.** You choose the secret yourself;
+   put the same value in `RAZORPAY_WEBHOOK_SECRET`. Subscribe to
+   `payment_link.paid`, `payment.failed`, `payment.captured`, and
+   `payment.downtime.started` / `.resolved`.
+5. The webhook URL must be publicly reachable, so for local development expose
+   the console through a tunnel (`cloudflared tunnel --url http://localhost:4000`
+   or `ngrok http 4000`) and point Razorpay at `https://<tunnel>/webhook`.
+
+```bash
+npm run preflight    # refuses a non-rzp_test_ key, creates a real link,
+                     # and checks a forged signature is rejected
+```
+
+The receiver lives at `POST /webhook` on the console. It verifies the signature
+before parsing the body, deduplicates on the Razorpay entity id so a retried
+delivery is a no-op, answers 401 rather than 400 on a bad signature so Razorpay
+stops retrying a forged one, and acknowledges immediately rather than holding
+the connection open while the engine works.
 
 ## Invariants the tests enforce
 
