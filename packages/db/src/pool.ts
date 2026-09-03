@@ -9,7 +9,13 @@ export const DATABASE_URL =
 let pool: pg.Pool | null = null;
 
 export function getPool(): pg.Pool {
-  pool ??= new Pool({ connectionString: DATABASE_URL });
+  // Sized to the batch runner's planning concurrency. The default of 10 makes
+  // concurrent planning queue on connections rather than on the provider, which
+  // is the thing that is actually slow.
+  pool ??= new Pool({
+    connectionString: DATABASE_URL,
+    max: Number(process.env["PG_POOL_MAX"] ?? 24),
+  });
   return pool;
 }
 

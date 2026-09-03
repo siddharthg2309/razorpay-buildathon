@@ -1,5 +1,6 @@
 export * from "./provider.js";
 export * from "./openai-provider.js";
+export * from "./cached-provider.js";
 export * from "./redaction.js";
 export * from "./claims.js";
 export * from "./specialists.js";

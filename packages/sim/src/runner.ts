@@ -18,8 +18,8 @@ import {
 import { IntentRouter, type CustomerIntent } from "@rra/engine";
 import { assignHoldout, estimate, stratumOf, trueIncremental, type CaseOutcome } from "@rra/attribution";
 import type { Scenario } from "./scenario.js";
-import { mulberry32 } from "@rra/attribution";
 import { generateCohort, type SyntheticCase } from "./cohort.js";
+import { draw } from "./deterministic-random.js";
 import { World } from "./world.js";
 
 export interface BatchOptions {
@@ -144,7 +144,7 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
    * asymmetry the symmetric exclusion rule exists to prevent.
    */
   const pendingSettlements: { atMs: number; caseId: string; idemKey: string; amountPaise: number }[] = [];
-  const settleRand = mulberry32(scenario.seed ^ 0xc0ffee);
+
   /**
    * Replies the agent's own contact provoked.
    *
@@ -153,9 +153,8 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
    * answering a message nobody sent.
    */
   const pendingReplies: { atMs: number; caseId: string; intent: CustomerIntent }[] = [];
-  const replyRand = mulberry32(scenario.seed ^ 0xbadca11);
-  const drawIntent = (): CustomerIntent => {
-    const r = replyRand();
+  const drawIntent = (caseId: string, attemptNo: number): CustomerIntent => {
+    const r = draw(scenario.seed, "intent", caseId, attemptNo);
     let acc = 0;
     for (const [intent, weight] of Object.entries(scenario.world.replyIntents)) {
       acc += weight;
@@ -229,7 +228,29 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
   await seedMerchant(scenario.merchant, cohort);
 
   // ---- Phase A: open every case and plan it -------------------------------
-  for (const [i, sc] of cohort.entries()) {
+  //
+  // Planned concurrently, bounded.
+  //
+  // Sequentially, 70 Tier 1 cases at roughly three seconds of provider latency
+  // each serialise into four minutes — most of a five-minute demo slot, spent
+  // waiting. The locks that make this safe already exist: seq is allocated
+  // under the case row lock, the obligation lease admits one actor, and every
+  // case's blackboard and claims are keyed by case id. The only thing that had
+  // to change was the randomness, which now hashes the identity of each draw
+  // rather than depending on the order the draws happen in.
+  const planConcurrency = Number(process.env["PLAN_CONCURRENCY"] ?? 12);
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const i = cursor++;
+      if (i >= cohort.length) return;
+      await openAndPlan(i, cohort[i]!);
+    }
+  };
+  await Promise.all(Array.from({ length: planConcurrency }, worker));
+  opts.onProgress?.(50);
+
+  async function openAndPlan(i: number, sc: SyntheticCase): Promise<void> {
     const holdout = assignHoldout(
       { caseId: sc.caseId, cause: sc.cause, amountPaise: sc.amountPaise },
       scenario.holdout,
@@ -246,7 +267,7 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
     ]);
 
     // The holdout arm is observed, never acted on. That is what it is for.
-    if (holdout) continue;
+    if (holdout) return;
 
     // Failures arrive over hours, not in one instant. Staggering matters for
     // more than realism: an injected degradation has to land on live traffic
@@ -970,12 +991,16 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       });
       stats.executed++;
       attemptNos.set(sc.caseId, attemptNo + 1);
-      if (action.consumesContactBudget && replyRand() < scenario.world.replyRate) {
+      if (
+        action.consumesContactBudget &&
+        draw(scenario.seed, "reply", sc.caseId, attemptNo) < scenario.world.replyRate
+      ) {
         // People answer hours later, not instantly.
+        const delay = draw(scenario.seed, "reply_delay", sc.caseId, attemptNo);
         pendingReplies.push({
-          atMs: elapsed + Math.floor((1 + replyRand() * 30) * HOUR),
+          atMs: elapsed + Math.floor((1 + delay * 30) * HOUR),
           caseId: sc.caseId,
-          intent: drawIntent(),
+          intent: drawIntent(sc.caseId, attemptNo),
         });
       }
       await events.append(sc.caseId, { type: "action_executed", actionId, attemptNo }, "executor");
@@ -990,7 +1015,9 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       for (const seg of segmentsOf(sc)) bump(windowCounts, segmentLabel(seg), !degraded);
       if (paid) {
         // 2h to 3 days for the customer to act on it.
-        const latency = Math.floor((2 + settleRand() * 70) * HOUR);
+        const latency = Math.floor(
+          (2 + draw(scenario.seed, "settle", sc.caseId, attemptNo) * 70) * HOUR,
+        );
         pendingSettlements.push({
           atMs: elapsed + latency,
           caseId: sc.caseId,

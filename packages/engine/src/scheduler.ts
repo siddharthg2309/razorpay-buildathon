@@ -71,7 +71,11 @@ export class Scheduler {
         `SELECT id, case_id, obligation_id, fire_at, action_ref, attempts
            FROM scheduled_actions
           WHERE state = 'pending' AND fire_at <= $1
-          ORDER BY fire_at, id
+          -- case_id before id. Rows get their BIGSERIAL in insert order, and
+          -- once cases are planned concurrently that order varies between runs,
+          -- which changes which action fires first within a tick and makes the
+          -- whole batch irreproducible. case_id is stable.
+          ORDER BY fire_at, case_id, id
           FOR UPDATE SKIP LOCKED
           LIMIT $2`,
         [now, limit],

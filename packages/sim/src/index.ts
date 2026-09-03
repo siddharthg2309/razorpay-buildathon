@@ -3,4 +3,5 @@ export * from "./cohort.js";
 export * from "./world.js";
 export * from "./runner.js";
 export * from "./report.js";
+export * from "./deterministic-random.js";
 export * from "./replay.js";

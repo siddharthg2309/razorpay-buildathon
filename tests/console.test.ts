@@ -17,7 +17,7 @@ let recoveredCase = "";
 
 beforeAll(async () => {
   await getPool().query(
-    `TRUNCATE attribution_runs, incident_members, incidents, segment_windows, segment_baselines,
+    `TRUNCATE claim_cache, attribution_runs, incident_members, incidents, segment_windows, segment_baselines,
               settlements, action_attempts, token_burns, capability_tokens, policy_decisions,
               contact_budgets, claims, agent_runs, scheduled_actions, obligation_locks,
               case_revisions, case_events, evidence, ledger, cases, obligations, customers,

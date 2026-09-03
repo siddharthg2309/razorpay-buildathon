@@ -11,7 +11,7 @@ const small = { ...scenario, size: 300 };
 
 beforeEach(async () => {
   await getPool().query(
-    `TRUNCATE attribution_runs, incident_members, incidents, segment_windows, segment_baselines,
+    `TRUNCATE claim_cache, attribution_runs, incident_members, incidents, segment_windows, segment_baselines,
               settlements, action_attempts, token_burns, capability_tokens, policy_decisions,
               contact_budgets, claims, agent_runs, scheduled_actions, obligation_locks,
               case_revisions, case_events, evidence, ledger, cases, obligations, customers,
@@ -134,7 +134,7 @@ describe("batch runner", () => {
   it("produces identical output for the same seed", async () => {
     const first = await runBatch({ scenario: small, arm: "full", provider: null });
     await getPool().query(
-      `TRUNCATE attribution_runs, settlements, action_attempts, token_burns, capability_tokens,
+      `TRUNCATE claim_cache, attribution_runs, settlements, action_attempts, token_burns, capability_tokens,
                 policy_decisions, contact_budgets, claims, agent_runs, scheduled_actions,
                 obligation_locks, case_revisions, case_events, evidence, ledger, cases,
                 obligations, customers, merchants CASCADE`,

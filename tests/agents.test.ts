@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ROLE_IDS, VirtualClock, loadConfig, type RoleId } from "@rra/core";
 import { closePool, getPool, Ledger } from "@rra/db";
@@ -60,7 +61,7 @@ const input = (over: Partial<SpecialistInput> = {}): SpecialistInput => ({
 
 beforeEach(async () => {
   await getPool().query(
-    "TRUNCATE settlements, action_attempts, token_burns, capability_tokens, policy_decisions, contact_budgets, claims, agent_runs, scheduled_actions, obligation_locks, case_revisions, case_events, evidence, ledger, cases, obligations, customers, merchants CASCADE",
+    "TRUNCATE claim_cache, settlements, action_attempts, token_burns, capability_tokens, policy_decisions, contact_budgets, claims, agent_runs, scheduled_actions, obligation_locks, case_revisions, case_events, evidence, ledger, cases, obligations, customers, merchants CASCADE",
   );
 });
 afterAll(async () => { await closePool(); });
@@ -394,5 +395,75 @@ describe("agent runtime", () => {
     const entries = await new Ledger(clock).read("c_rt4");
     const claim = entries.find((e) => e.eventType === "claim_written");
     expect(claim?.payload).toMatchObject({ usedProvider: true, provider: "stub", cachedInputTokens: 80 });
+  });
+});
+
+describe("claim cache", () => {
+  it("serves a second identical request without calling the provider", async () => {
+    const { CachedProvider } = await import("@rra/agents");
+    const clock = new VirtualClock(T0);
+    const inner = stubProvider<DiagnosisClaim>({
+      primaryCause: "issuer_decline", confidence: 0.7, alternatives: [],
+      ruleId: null, evidenceRefs: ["ev_1"],
+    });
+    const cached = new CachedProvider(inner, clock);
+    const req = {
+      role: "payment_diagnosis" as const,
+      instructions: "diagnose", input: JSON.stringify({ code: "N7", nonce: randomUUID() }),
+      schema: {}, schemaName: "diagnosis_claim", schemaVersion: "1",
+      model: "gpt-5.6-terra", effort: "medium" as const,
+      cacheKey: "k", timeoutMs: 5000,
+    };
+
+    const first = await cached.complete<DiagnosisClaim>(req);
+    const second = await cached.complete<DiagnosisClaim>(req);
+
+    // The provider is the only non-deterministic element in an otherwise
+    // reproducible batch; caching it is what lets a rehearsal be compared
+    // against the run before it.
+    expect(inner.calls).toHaveLength(1);
+    expect(second.value).toEqual(first.value);
+    expect(cached.stats).toEqual({ hits: 1, misses: 1 });
+  });
+
+  it("labels a cached answer so it cannot pass as a fresh one", async () => {
+    const { CachedProvider } = await import("@rra/agents");
+    const clock = new VirtualClock(T0);
+    const cached = new CachedProvider(stubProvider({ ok: true }), clock);
+    const req = {
+      role: "customer_context" as const, instructions: "x", input: randomUUID(),
+      schema: {}, schemaName: "context_claim", schemaVersion: "1",
+      model: "gpt-5.6-luna", effort: "none" as const, cacheKey: "k", timeoutMs: 5000,
+    };
+    await cached.complete(req);
+    const hit = await cached.complete(req);
+    expect(hit.provider).toMatch(/cached/);
+    expect(hit.responseId).toMatch(/^cache:/);
+  });
+
+  it("keys on the instructions, so changing the prompt invalidates the answer", async () => {
+    const { CachedProvider } = await import("@rra/agents");
+    const base = {
+      role: "payment_diagnosis" as const, input: "same",
+      schema: {}, schemaName: "s", schemaVersion: "1",
+      model: "m", effort: "low" as const, cacheKey: "k", timeoutMs: 1000,
+    };
+    // A changed prompt must not silently serve answers produced under the old.
+    expect(CachedProvider.keyFor({ ...base, instructions: "old" }))
+      .not.toBe(CachedProvider.keyFor({ ...base, instructions: "new" }));
+  });
+
+  it("can be turned off when fresh calls are wanted", async () => {
+    const { CachedProvider } = await import("@rra/agents");
+    const inner = stubProvider({ ok: true });
+    const off = new CachedProvider(inner, new VirtualClock(T0), false);
+    const req = {
+      role: "customer_context" as const, instructions: "x", input: randomUUID(),
+      schema: {}, schemaName: "s", schemaVersion: "1",
+      model: "m", effort: "none" as const, cacheKey: "k", timeoutMs: 1000,
+    };
+    await off.complete(req);
+    await off.complete(req);
+    expect(inner.calls).toHaveLength(2);
   });
 });

@@ -41,6 +41,8 @@ No credentials are needed for any of the above.
 | `npm run verify:ps` | Audits the build against the problem statement, with evidence per line |
 | `npm run live-case` | Runs one case against real Razorpay Test Mode, end to end |
 | `npm run verify:openai` | Confirms the key works without printing it |
+| `npm run demo` | One command: reset, console, batch, and what to show in order |
+| `npm run lab:sweep` | Compares estimators against ground truth across seeds |
 
 ## What is simulated and what is not
 
