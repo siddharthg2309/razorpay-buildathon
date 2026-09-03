@@ -26,7 +26,8 @@
     "check": "tsc -b --pretty false && tsx scripts/lint-clock.ts && tsx scripts/coverage.ts && vitest run",
     "verify:ps": "node --env-file-if-exists=.env --import tsx scripts/verify-ps.ts",
     "live-case": "node --env-file-if-exists=.env --import tsx scripts/live-case.ts",
-    "settle-live": "node --env-file-if-exists=.env --import tsx scripts/settle-live.ts"
+    "settle-live": "node --env-file-if-exists=.env --import tsx scripts/settle-live.ts",
+    "adopt-live": "node --env-file-if-exists=.env --import tsx scripts/adopt-live.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

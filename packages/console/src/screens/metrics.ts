@@ -72,8 +72,11 @@ export async function metricsScreen(): Promise<string> {
   // the headline — a recovered renewal is cash collected once, not cash plus
   // retained MRR.
   const { rows: mrr } = await pool.query<{ n: string; collected: string; at_risk: string }>(
-    `SELECT count(*) FILTER (WHERE state = 'RECOVERED') AS n,
-            coalesce(sum(o.amount_paise) FILTER (WHERE state = 'RECOVERED'), 0) AS collected,
+    // Both cases and obligations carry a `state` column, so every reference
+    // here is qualified — an unqualified one is an ambiguity error at runtime,
+    // not a compile error.
+    `SELECT count(*) FILTER (WHERE c.state = 'RECOVERED') AS n,
+            coalesce(sum(o.amount_paise) FILTER (WHERE c.state = 'RECOVERED'), 0) AS collected,
             coalesce(sum(o.amount_paise), 0) AS at_risk
        FROM cases c JOIN obligations o ON o.id = c.obligation_id
       WHERE c.domain = 'subscription_renewal' AND c.holdout_flag = false`,

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
-  CapabilityMinter, VirtualClock, hashParams, loadConfig, loadPolicy,
-  type EngineConfig, type Policy,
+  CapabilityMinter, VirtualClock, canTransition, hashParams, loadConfig, loadPolicy,
+  type CaseState, type EngineConfig, type Policy,
 } from "@rra/core";
 import { CaseEventStore, Ledger, getPool } from "@rra/db";
 import { SimulatedPSP, type LatentCustomer } from "@rra/connectors";
@@ -561,6 +561,13 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
     startDelayMs = 0,
   ): Promise<void> {
     if (steps.length === 0 || closed.has(sc.caseId)) return;
+    // Only re-plan from a state that legally permits it. Anything else means
+    // the case is mid-flight and re-planning it would be a lie about where it is.
+    const { rows: st } = await getPool().query<{ state: CaseState }>(
+      "SELECT state FROM cases WHERE id = $1", [sc.caseId],
+    );
+    const current = st[0]?.state;
+    if (!current || !canTransition(current, "DIAGNOSING")) return;
     stats.planned++;
     remainingSteps.set(sc.caseId, [...steps]);
     attemptNos.set(sc.caseId, 0);
@@ -663,6 +670,14 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       stats.stepErrors++;
       if (stats.errorSamples.length < 5) stats.errorSamples.push((err as Error).message);
       remainingSteps.delete(sc.caseId);
+      // Move the case out of EXECUTING. The provider answered — with a refusal
+      // — so the attempt is over, and a case stranded in EXECUTING cannot
+      // legally be re-planned when an incident later releases it.
+      await events.append(
+        sc.caseId,
+        { type: "outcome_observed", outcome: "execution_failed" },
+        "executor",
+      );
     }
   }
 

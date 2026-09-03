@@ -1,7 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { RealClock } from "@rra/core";
 import { Ledger, getPool } from "@rra/db";
-import { UnverifiedWebhookError, ingestWebhook } from "@rra/connectors";
+import { UnverifiedWebhookError, ingestWebhook, toReferenceId } from "@rra/connectors";
+import { Reconciler, Verifier } from "@rra/engine";
 
 const MAX_BODY_BYTES = 1_000_000;
 
@@ -77,8 +78,10 @@ export async function handleWebhook(req: IncomingMessage, res: ServerResponse): 
     return;
   }
 
+  const settlement = await settleIfPaid(event);
+
   await ledger.append({
-    caseId: event.externalRef ?? event.eventId,
+    caseId: settlement?.caseId ?? event.externalRef ?? event.eventId,
     actor: "razorpay_webhook",
     eventType: "webhook_received",
     payload: {
@@ -88,11 +91,55 @@ export async function handleWebhook(req: IncomingMessage, res: ServerResponse): 
       errorCode: event.errorCode,
       externalRef: event.externalRef,
       amountPaise: event.amountPaise,
+      settled: settlement?.outcome ?? null,
       surface: "live",
     },
   });
 
   // Acknowledge fast. Razorpay times out deliveries, and holding the connection
   // open while the engine works turns a slow case into a retried delivery.
-  res.writeHead(200).end("ok");
+  res.writeHead(200).end(settlement ? `ok — case ${settlement.caseId} ${settlement.outcome}` : "ok");
+}
+
+const PAID_EVENTS = new Set(["payment_link.paid", "payment.captured", "subscription.charged"]);
+
+/**
+ * A delivery that reports money is the push half of reconciliation.
+ *
+ * Matching runs through the same Reconciler the pull path uses, so a case
+ * closed by a webhook and one closed by polling are closed identically — and
+ * whichever arrives second is deduplicated on the settlement id rather than
+ * counted twice.
+ */
+async function settleIfPaid(
+  event: Awaited<ReturnType<typeof ingestWebhook>>,
+): Promise<{ caseId: string; outcome: string } | null> {
+  if (!PAID_EVENTS.has(event.type)) return null;
+
+  const clock = new RealClock();
+  const verifier = new Verifier(new Reconciler(clock), new Ledger(clock), clock);
+
+  // Prefer our own notes, which carry the case and obligation directly. Fall
+  // back to reference_id, which is the truncated idem_key.
+  const reference = event.externalRef ?? "";
+  const { rows } = await getPool().query<{
+    case_id: string; idem_key: string; merchant_id: string; amount_paise: string;
+  }>(
+    `SELECT a.case_id, a.idem_key, o.merchant_id, o.amount_paise
+       FROM action_attempts a JOIN obligations o ON o.id = a.obligation_id
+      WHERE a.obligation_id = $1 OR left(a.idem_key, $3) = $2
+      ORDER BY a.sent_at DESC LIMIT 1`,
+    [String(event.notes["obligation_id"] ?? ""), reference, toReferenceId("x".repeat(64)).length],
+  );
+  const attempt = rows[0];
+  if (!attempt) return null;
+
+  const outcome = await verifier.onSettlement({
+    id: `set_wh_${event.eventId}`,
+    merchantId: attempt.merchant_id,
+    amountPaise: event.amountPaise ?? Number(attempt.amount_paise),
+    source: "razorpay_webhook",
+    idemKey: attempt.idem_key,
+  });
+  return { caseId: attempt.case_id, outcome: outcome.kind };
 }

@@ -156,3 +156,34 @@ describe("event reducer", () => {
     ).toThrow(IllegalTransitionError);
   });
 });
+
+describe("observing an outcome while executing", () => {
+  it("moves the case out of EXECUTING so it can be re-planned later", () => {
+    const r = reduceAll(
+      "c_1",
+      log(
+        { type: "case_opened", domain: "payment_failure", holdout: false },
+        { type: "diagnosis_started", tier: 0 },
+        { type: "plan_proposed", planVersion: 1 },
+        { type: "approval_granted", approver: "policy" },
+        { type: "outcome_observed", outcome: "execution_failed" },
+      ),
+    );
+    // A case stranded in EXECUTING cannot legally be re-planned when an
+    // incident later releases it, and a failed attempt would be
+    // indistinguishable from one still in flight.
+    expect(r.state).toBe("OBSERVING");
+  });
+
+  it("leaves other states untouched", () => {
+    const r = reduceAll(
+      "c_1",
+      log(
+        { type: "case_opened", domain: "payment_failure", holdout: false },
+        { type: "diagnosis_started", tier: 0 },
+        { type: "outcome_observed", outcome: "noted" },
+      ),
+    );
+    expect(r.state).toBe("DIAGNOSING");
+  });
+});

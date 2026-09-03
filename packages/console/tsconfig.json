@@ -2,5 +2,5 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "outDir": "dist", "rootDir": "src", "lib": ["ES2023", "DOM"] },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../core" }, { "path": "../db" }, { "path": "../connectors" }]
+  "references": [{ "path": "../core" }, { "path": "../db" }, { "path": "../connectors" }, { "path": "../engine" }]
 }

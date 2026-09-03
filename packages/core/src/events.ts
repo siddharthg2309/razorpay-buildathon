@@ -96,10 +96,16 @@ function targetState(e: CaseEvent, current: CaseState): CaseState | null {
       return "SCHEDULED";
     case "terminal_reached":
       return e.state;
-    // Evidence and observations inform the case without moving it. The work
-    // router decides whether they warrant re-diagnosis.
-    case "evidence_added":
+    // Observing an outcome while executing means the execution finished — the
+    // provider answered, whether it succeeded or not. Leaving the case in
+    // EXECUTING makes a failed attempt indistinguishable from one still in
+    // flight, and blocks every legal transition out of it.
     case "outcome_observed":
+      return current === "EXECUTING" ? "OBSERVING" : current;
+
+    // Evidence informs the case without moving it. The work router decides
+    // whether it warrants re-diagnosis.
+    case "evidence_added":
       return current;
   }
 }

@@ -8,6 +8,7 @@ import { caseScreen, casesScreen } from "@rra/console/screens/cases";
 import { incidentsScreen } from "@rra/console/screens/incidents";
 import { policyScreen } from "@rra/console/screens/policy";
 import { attributionScreen } from "@rra/console/screens/attribution";
+import { metricsScreen } from "@rra/console/screens/metrics";
 import { streamScreen } from "@rra/console/screens/stream";
 import { readSince } from "@rra/console/stream";
 
@@ -111,6 +112,22 @@ describe("console screens", () => {
     expect(html).toContain("rate_treated");
     expect(html).toContain("mean_value_at_risk");
     expect(html).toContain("applied symmetrically to both arms");
+  });
+
+  it("renders the metrics screen with every breakdown the brief asks for", async () => {
+    // This screen joins cases to obligations and both carry a `state` column,
+    // so an unqualified reference is a runtime ambiguity error rather than a
+    // compile error — it needs a test that actually executes the queries.
+    const html = await metricsScreen();
+    for (const heading of ["by cause", "by rail", "by gateway", "by issuer"]) {
+      expect(html).toContain(heading);
+    }
+    expect(html).toContain("time to recovery");
+    expect(html).toContain("renewals collected");
+    expect(html).toContain("invoice aging at recovery");
+    // Breakdowns must exclude the holdout, or every row understates by the
+    // natural-recovery rate.
+    expect(html).toContain("treated arm only");
   });
 
   it("serves a stream page that subscribes to the event source", () => {

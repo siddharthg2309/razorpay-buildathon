@@ -45,6 +45,8 @@ export interface NormalizedEvent {
   amountPaise: number | null;
   rail: string | null;
   errorCode: string | null;
+  /** Merchant notes we set when creating the entity — our own identifiers. */
+  notes: Record<string, unknown>;
   raw: Record<string, unknown>;
 }
 
@@ -101,6 +103,7 @@ export function ingestWebhook(
       (typeof entity["reference_id"] === "string" ? entity["reference_id"] : null),
     amountPaise: typeof entity["amount"] === "number" ? entity["amount"] : null,
     rail: method ? (METHOD_TO_RAIL[method] ?? method) : null,
+    notes,
     errorCode:
       (typeof entity["error_reason"] === "string" ? entity["error_reason"] : null) ??
       (typeof entity["error_code"] === "string" ? entity["error_code"] : null),

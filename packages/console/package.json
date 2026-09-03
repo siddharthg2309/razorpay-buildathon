@@ -7,7 +7,8 @@
   "dependencies": {
     "@rra/core": "*",
     "@rra/db": "*",
-    "@rra/connectors": "*"
+    "@rra/connectors": "*",
+    "@rra/engine": "*"
   },
   "exports": {
     ".": "./src/server.ts",
