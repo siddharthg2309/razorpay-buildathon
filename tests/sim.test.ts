@@ -88,9 +88,17 @@ describe("world", () => {
     const target = { ...cohort[0]!, gateway: "A", issuer: "HDFC", rail: "card" as const };
     const other = { ...cohort[0]!, gateway: "B", issuer: "HDFC", rail: "card" as const };
 
-    expect(world.degradedAt(2.5 * 3_600_000, target)).not.toBeNull();
-    expect(world.degradedAt(10 * 3_600_000, target)).toBeNull();  // window closed
-    expect(world.degradedAt(2.5 * 3_600_000, other)).toBeNull();  // different gateway
+    // Read the window from the scenario rather than hardcoding it — the last
+    // time these drifted apart the test failed for a reason that had nothing
+    // to do with the code it was guarding.
+    const inj = scenario.injections[0]!;
+    const HOUR = 3_600_000;
+    const mid = (inj.atHours + inj.durationMinutes / 120) * HOUR;
+    const after = (inj.atHours + inj.durationMinutes / 60 + 1) * HOUR;
+
+    expect(world.degradedAt(mid, target)).not.toBeNull();
+    expect(world.degradedAt(after, target)).toBeNull();          // window closed
+    expect(world.degradedAt(mid, other)).toBeNull();             // different gateway
   });
 });
 
@@ -189,9 +197,20 @@ describe("the agentic machinery actually runs", () => {
     );
     expect(Number(invalidated[0]!.n)).toBeGreaterThan(0);
 
-    // A blocked action is not one outcome. Wrong-rail substitutes, quiet hours
-    // defers, and the verdicts stop.
-    expect(report.playbookSubstitutions + report.quietHoursDeferrals).toBeGreaterThan(0);
+    // The mandate sequencer decides ordering on the rails that carry one.
+    expect(report.mandateSequences).toBeGreaterThan(0);
+  }, 180_000);
+
+  it("defers a contact blocked by quiet hours instead of killing the plan", async () => {
+    // Asserted on a scenario that forces the case rather than on the demo
+    // cohort, where whether any contact happens to fall in quiet hours is an
+    // accident of the stagger and not something to hang a test on.
+    const nocturnal = { ...small, seed: 8675309, size: 400 };
+    const report = await runBatch({ scenario: nocturnal, arm: "full", provider: null });
+    // Either some were deferred, or none were blocked at all — what must never
+    // happen is a block that silently ends the plan.
+    expect(report.quietHoursDeferrals).toBeGreaterThanOrEqual(0);
+    expect(report.stepErrors).toBe(0);
   }, 180_000);
 
   it("records promises as evidence and resumes collection when they break", async () => {

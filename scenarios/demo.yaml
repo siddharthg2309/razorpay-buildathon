@@ -69,11 +69,17 @@ measurement:
   natural_recovery_window_minutes: 30
 
 injections:
-  - at_hours: 2
+  # Starts after a baseline has accumulated and runs long enough to clear the
+  # detector's dwell requirement of two consecutive windows.
+  - at_hours: 4
     type: gateway_degradation
-    segment: { gateway: A, issuer: HDFC, method: card }
+    # A gateway/method outage, not a single issuer on a single rail. The
+    # narrower fault was ~89 cases spread over 14 hours, which is genuinely
+    # below the n>=30 volume floor — the detector correctly refused to fire on
+    # it, and injecting an undetectable fault only tested the floor.
+    segment: { gateway: A, method: card }
     approval_drop: 0.55
     # Must span at least the detector's dwell requirement of two windows, or a
     # real degradation is indistinguishable from a single-window blip — which
     # is exactly what dwell exists to filter out.
-    duration_minutes: 360
+    duration_minutes: 480

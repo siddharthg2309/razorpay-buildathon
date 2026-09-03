@@ -185,9 +185,25 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
    */
   const windowCounts = new Map<string, { attempts: number; approvals: number }>();
   const baselineCounts = new Map<string, { attempts: number; approvals: number }>();
+  /**
+   * The dimensions a failure can actually occur on.
+   *
+   * Method has to be here. A gateway/issuer/method outage is invisible to a
+   * detector that only tests gateway and gateway+issuer, because every segment
+   * it looks at is a strict superset of the failing population and the signal
+   * is diluted by the rails that are fine. The incident simply never opens —
+   * which is what happened, silently, until the segment key was compared
+   * against the injection.
+   *
+   * Child suppression then picks the right locus among the three.
+   */
+  const methodOf = (rail: string): string =>
+    rail === "card" ? "card" : rail.startsWith("upi") ? "upi" : rail;
+
   const segmentsOf = (sc: SyntheticCase): SegmentKey[] => [
     { gateway: sc.gateway },
     { gateway: sc.gateway, issuer: sc.issuer },
+    { gateway: sc.gateway, issuer: sc.issuer, method: methodOf(sc.rail) },
   ];
   const bump = (m: Map<string, { attempts: number; approvals: number }>, label: string, ok: boolean) => {
     const row = m.get(label) ?? { attempts: 0, approvals: 0 };
@@ -235,7 +251,7 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
     // Failures arrive over hours, not in one instant. Staggering matters for
     // more than realism: an injected degradation has to land on live traffic
     // to be detectable at all.
-    await plan(sc, (i % 6) * HOUR);
+    await plan(sc, (i % 14) * HOUR);
     if (i % 200 === 0) opts.onProgress?.(Math.round((i / cohort.length) * 50));
   }
 
@@ -384,7 +400,22 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       });
     }
 
-    for (const candidate of windowClosed ? detector.evaluate(observations) : []) {
+    const flagged = windowClosed ? detector.evaluate(observations) : [];
+    // Every segment that failed its test this window, not only the ones that
+    // cleared dwell — a segment on its way to opening an incident must not have
+    // its degraded traffic folded into the baseline it is about to be compared
+    // against.
+    const anomalous = new Set(
+      observations
+        .filter((o) => {
+          const base = o.baselineAttempts ? o.baselineApprovals / o.baselineAttempts : 0;
+          const rate = o.attempts ? o.approvals / o.attempts : 0;
+          return o.attempts > 0 && base > 0 && rate < base * 0.9;
+        })
+        .map((o) => segmentLabel(o.segment)),
+    );
+
+    for (const candidate of flagged) {
       if (openIncidents.has(candidate.label)) continue;
       const incidentId = await incidents.open(candidate, "detector");
       openIncidents.set(candidate.label, { id: incidentId, segment: candidate.segment });
@@ -443,9 +474,17 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       }
     }
 
-    // Fold the window into the baseline and start a fresh one.
+    // Fold the window into the baseline and start a fresh one — except where
+    // the segment was anomalous.
+    //
+    // A cumulative baseline that absorbs its own anomaly stops being a
+    // baseline: one degraded window lowers the bar, the next window compares
+    // favourably against it, and the incident never opens however long the
+    // outage runs. Freezing the baseline for a failing segment is what a
+    // seasonal baseline gives for free and a running one has to be told.
     if (windowClosed) {
       for (const [label, w] of windowCounts) {
+        if (anomalous.has(label)) continue;
         const base = baselineCounts.get(label) ?? { attempts: 0, approvals: 0 };
         base.attempts += w.attempts;
         base.approvals += w.approvals;
@@ -628,7 +667,24 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
         });
         const usable = plan.steps.filter((st) => permitted.includes(st.actionId));
         if (usable.length > 0) {
-          sequenced = usable.map((st) => ({ actionId: st.actionId, params: st.params }));
+          // The sequencer constrains *ordering*; it does not supply the
+          // recovery. Its steps are prerequisites and waits, all of which are
+          // schedule-kind and reach no connector — so using them alone leaves
+          // the case doing nothing at all, which is exactly what happened the
+          // first time this was wired.
+          //
+          // When a debit is permitted, its steps prefix the playbook's: notice
+          // and cycle first, then the actions that actually recover the money.
+          // When a debit is refused — revoked, paused, cap breached — its steps
+          // *are* the remedy and the playbook is wrong, so they replace it.
+          sequenced = plan.permitted
+            ? [
+                ...usable.map((st) => ({ actionId: st.actionId, params: st.params })),
+                ...outcome.plan.steps
+                  .filter((st) => permitted.includes(st.actionId))
+                  .map((st) => ({ actionId: st.actionId, params: st.params })),
+              ]
+            : usable.map((st) => ({ actionId: st.actionId, params: st.params }));
           stats.mandateSequenced++;
           await ledger.append({
             caseId: sc.caseId, actor: "mandate_sequencer", eventType: "mandate_sequenced",
