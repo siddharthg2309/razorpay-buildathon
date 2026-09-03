@@ -40,6 +40,7 @@ No credentials are needed for any of the above.
 | `npm run preflight` | Checks Razorpay Test Mode credentials and the webhook secret |
 | `npm run verify:ps` | Audits the build against the problem statement, with evidence per line |
 | `npm run live-case` | Runs one case against real Razorpay Test Mode, end to end |
+| `npm run verify:openai` | Confirms the key works without printing it |
 
 ## What is simulated and what is not
 
@@ -149,6 +150,19 @@ a chain of prompts, is the product.
 ```
 
 ## Configuration
+
+### OpenAI
+
+Paste the key straight into `.env` on the `OPENAI_API_KEY=` line — never through
+a chat window, a commit, or a shell command, all of which keep history. The file
+is gitignored and `chmod 600`.
+
+```bash
+npm run verify:openai        # checks shape, then makes one throwaway call
+```
+
+It reports a length, a prefix and a boolean — never the key. Provider errors are
+redacted before printing, because they sometimes echo request context.
 
 `OPENAI_API_KEY` is **optional**. Without it Tier 0 still carries ~95% of cases;
 Tier 1 falls into degraded mode and escalates to a human rather than
