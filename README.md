@@ -39,6 +39,7 @@ No credentials are needed for any of the above.
 | `npm run reset` | Returns the database to empty (~70ms) |
 | `npm run preflight` | Checks Razorpay Test Mode credentials and the webhook secret |
 | `npm run verify:ps` | Audits the build against the problem statement, with evidence per line |
+| `npm run live-case` | Runs one case against real Razorpay Test Mode, end to end |
 
 ## What is simulated and what is not
 
@@ -175,7 +176,18 @@ Needed only for the one live case.
 ```bash
 npm run preflight    # refuses a non-rzp_test_ key, creates a real link,
                      # and checks a forged signature is rejected
+npm run live-case    # opens a case, mints a token, creates a REAL test-mode
+                     # link, and polls until the money arrives
 ```
+
+`live-case` prints an `rzp.io` URL. Open it, pay with a Razorpay test
+instrument (card `4111 1111 1111 1111`, any future expiry and CVV, or UPI id
+`success@razorpay` — check Razorpay's test-card docs if these have moved), and
+the case closes to `RECOVERED` on a verified capture. Then open
+`http://localhost:4000/case/<id>` to read the trail: policy rule, capability
+token, burned nonce, live attempt, settlement, terminal state.
+
+Scripts load `.env` via Node's `--env-file-if-exists`, so no dotenv dependency.
 
 The receiver lives at `POST /webhook` on the console. It verifies the signature
 before parsing the body, deduplicates on the Razorpay entity id so a retried

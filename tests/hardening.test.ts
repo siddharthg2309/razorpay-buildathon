@@ -119,3 +119,66 @@ describe("webhook receiver", () => {
     expect(typeof handleWebhook).toBe("function");
   });
 });
+
+describe("razorpay request shape", () => {
+  it("truncates reference_id to Razorpay's 40-character limit", async () => {
+    const { toReferenceId, RAZORPAY_REFERENCE_MAX } = await import("@rra/connectors");
+    // idem_key is a 64-char sha256; sending it whole is rejected with
+    // BAD_REQUEST_ERROR, which is how a live link came back undefined.
+    const idemKey = "a".repeat(64);
+    expect(toReferenceId(idemKey)).toHaveLength(RAZORPAY_REFERENCE_MAX);
+    expect(idemKey.startsWith(toReferenceId(idemKey))).toBe(true);
+  });
+
+  it("derives the same reference when writing and when reading back", async () => {
+    const { RazorpayTestAdapter, toReferenceId } = await import("@rra/connectors");
+    const idemKey = "b".repeat(64);
+    const seen: string[] = [];
+    const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const u = String(url);
+      seen.push(init?.body ? String(init.body) : u);
+      return new Response(JSON.stringify({ id: "plink_x", payment_links: [] }), { status: 200 });
+    }) as typeof fetch;
+
+    const adapter = new RazorpayTestAdapter(
+      { keyId: "rzp_test_x", keySecret: "s", webhookSecret: "w" }, fakeFetch,
+    );
+    await adapter.createPaymentLink(
+      { caseId: "c", obligationId: "o", customerId: "cu", params: { amount: 100 }, idemKey },
+      { caseId: "c", obligationId: "o", actionId: "create_payment_link", paramsHash: "h",
+        attemptNo: 0, amountCapPaise: 100, currency: "INR", policyVersion: "v7",
+        ruleId: "R-500", notAfter: new Date(Date.now() + 60000).toISOString(),
+        nonce: "n", hmac: "x" },
+    );
+    await adapter.fetchPaymentStatus(idemKey);
+
+    const ref = toReferenceId(idemKey);
+    // Both the write and the read must use the same derivation, or the status
+    // lookup silently never matches.
+    expect(seen[0]).toContain(ref);
+    expect(seen[1]).toContain(ref);
+    expect(seen[0]).not.toContain(idemKey);
+  });
+
+  it("surfaces the provider's error rather than returning a shapeless failure", async () => {
+    const { RazorpayTestAdapter } = await import("@rra/connectors");
+    const fakeFetch = (async () =>
+      new Response(
+        JSON.stringify({ error: { code: "BAD_REQUEST_ERROR", description: "reference_id: the length must be no more than 40." } }),
+        { status: 400 },
+      )) as typeof fetch;
+    const adapter = new RazorpayTestAdapter(
+      { keyId: "rzp_test_x", keySecret: "s", webhookSecret: "w" }, fakeFetch,
+    );
+    const res = await adapter.createPaymentLink(
+      { caseId: "c", obligationId: "o", customerId: "cu", params: { amount: 100 }, idemKey: "k" },
+      { caseId: "c", obligationId: "o", actionId: "create_payment_link", paramsHash: "h",
+        attemptNo: 0, amountCapPaise: 100, currency: "INR", policyVersion: "v7",
+        ruleId: "R-500", notAfter: new Date(Date.now() + 60000).toISOString(),
+        nonce: "n", hmac: "x" },
+    );
+    expect(res.ok).toBe(false);
+    expect(String(res.detail["message"])).toMatch(/no more than 40/);
+    expect(res.reference).toBeUndefined();
+  });
+});

@@ -8,6 +8,17 @@ import {
   type PSPAdapter,
 } from "./adapter.js";
 
+/**
+ * Razorpay caps reference_id at 40 characters and our idem_key is a 64-char
+ * sha256, so the full key is rejected with BAD_REQUEST_ERROR. Truncating to 40
+ * hex characters leaves 160 bits, which is not a collision risk, and the same
+ * derivation is used when reading the status back — otherwise the lookup would
+ * never match what was written.
+ */
+export const RAZORPAY_REFERENCE_MAX = 40;
+export const toReferenceId = (idemKey: string): string =>
+  idemKey.slice(0, RAZORPAY_REFERENCE_MAX);
+
 export interface RazorpayCredentials {
   keyId: string;
   keySecret: string;
@@ -48,14 +59,28 @@ export class RazorpayTestAdapter implements PSPAdapter {
       body: JSON.stringify({
         amount: token.amountCapPaise ?? call.params["amount"],
         currency: "INR",
-        reference_id: call.idemKey,
+        reference_id: toReferenceId(call.idemKey),
         expire_by: Math.floor(new Date(token.notAfter).getTime() / 1000) + 86_400,
         notes: { case_id: call.caseId, obligation_id: call.obligationId },
       }),
     });
     const body = (await res.json()) as Record<string, unknown>;
+    if (!res.ok) {
+      // Carry the provider's own message through. A failure that returns a
+      // shapeless object reads as success to anything that only checks for an
+      // exception.
+      const err = body["error"] as { description?: string; code?: string } | undefined;
+      return {
+        ok: false,
+        detail: {
+          ...body,
+          httpStatus: res.status,
+          message: err?.description ?? `razorpay returned ${res.status}`,
+        },
+      };
+    }
     return {
-      ok: res.ok,
+      ok: true,
       ...(typeof body["id"] === "string" ? { reference: body["id"] } : {}),
       detail: body,
     };
@@ -64,7 +89,7 @@ export class RazorpayTestAdapter implements PSPAdapter {
   async fetchPaymentStatus(idemKey: string): Promise<PaymentStatus> {
     const auth = Buffer.from(`${this.creds.keyId}:${this.creds.keySecret}`).toString("base64");
     const res = await this.fetchImpl(
-      `https://api.razorpay.com/v1/payment_links?reference_id=${encodeURIComponent(idemKey)}`,
+      `https://api.razorpay.com/v1/payment_links?reference_id=${encodeURIComponent(toReferenceId(idemKey))}`,
       { headers: { Authorization: `Basic ${auth}` } },
     );
     if (!res.ok) return { found: false, captured: false };
