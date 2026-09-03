@@ -527,6 +527,16 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       payload: { rail: sc.rail, code: sc.code }, source: "simulator",
     });
 
+    if (sc.ambiguous) {
+      // Retrieved context belongs on the blackboard too, not only in the
+      // prompt: the case trail has to show what the diagnosis was reasoned
+      // over, or "cites evidence" is a claim nobody can check.
+      await blackboard.addEvidence({
+        id: `ev_ctx_${sc.caseId}`, caseId: sc.caseId, kind: "mandate_state",
+        payload: sc.ambiguous, source: "feature_builder",
+      });
+    }
+
     const outcome = tier0.resolve({ domain: sc.domain, rail: sc.rail, code: sc.code, attemptNo: 0 });
     if (outcome.resolved) {
       stats.tier0++;
@@ -646,9 +656,8 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       revision,
       decision.rerun,
       {
-        caseId: sc.caseId, domain: sc.domain, rail: sc.rail, code: sc.code, attemptNo: 0,
-        amountPaise: sc.amountPaise, evidenceRefs: [evidenceId], priorContacts: 0,
-        optedOut: false, language: "en",
+        ...specialistInput(sc, evidenceId),
+        ...(sc.ambiguous ? { evidenceRefs: [evidenceId, `ev_ctx_${sc.caseId}`] } : {}),
       },
       permitted,
     );
@@ -947,6 +956,7 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       caseId: sc.caseId, domain: sc.domain, rail: sc.rail, code: sc.code, attemptNo: 0,
       amountPaise: sc.amountPaise, evidenceRefs: [evidenceId], priorContacts,
       optedOut: false, language: "en" as const,
+      ...(sc.ambiguous ? { context: sc.ambiguous } : {}),
     };
   }
 

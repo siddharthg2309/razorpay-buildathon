@@ -80,7 +80,6 @@ export function renderReport(r: BatchReport): string {
 
 /** Side-by-side ablation: what parallel deliberation actually contributed. */
 export function renderAblation(full: BatchReport, control: BatchReport): string {
-  const delta = full.attribution.incrementalPaise - control.attribution.incrementalPaise;
   if (full.providerCalls === 0) {
     return [
       "ABLATION — NOT MEANINGFUL: no provider was configured.",
@@ -93,13 +92,55 @@ export function renderAblation(full: BatchReport, control: BatchReport): string 
       "  Set OPENAI_API_KEY and re-run to measure the model's contribution.",
     ].join("\n");
   }
-  return [
+
+  const delta = full.attribution.incrementalPaise - control.attribution.incrementalPaise;
+  const tierShare = full.tier1Escalated / full.cases;
+
+  // How much the batch total can move on noise alone, given how few cases the
+  // two arms actually differ on. Anything inside this is unreadable, and
+  // reporting a bare rupee figure invites over-reading it in both directions.
+  const meanValue = full.attribution.meanValueAtRiskPaise;
+  const differingCases = full.tier1Escalated;
+  const noiseBand = Math.round(1.96 * Math.sqrt(differingCases) * meanValue * 0.5);
+  const readable = Math.abs(delta) > noiseBand;
+
+  const lines = [
     "ABLATION — same seed, same world, deliberation on vs off",
     `  full runtime      incremental ${rupees(full.attribution.incrementalPaise)}   lift ${pct(full.attribution.lift)}   provider calls ${full.providerCalls}`,
     `  tier-0 control    incremental ${rupees(control.attribution.incrementalPaise)}   lift ${pct(control.attribution.lift)}   provider calls ${control.providerCalls}`,
-    `  attributable to deliberation: ${rupees(delta)}`,
+    "",
+    `  difference        ${rupees(delta)}   over ${differingCases} cases (${pct(tierShare)} of the batch)`,
+    `  noise band        +/- ${rupees(noiseBand)}`,
+    "",
+  ];
+
+  if (!readable) {
+    lines.push(
+      "  NOT DISTINGUISHABLE FROM ZERO.",
+      "",
+      `  The arms differ on ${differingCases} cases, and a batch total cannot resolve a`,
+      "  difference that small. This is the honest reading, and it is the reading",
+      "  to give: deliberation did not measurably move the batch.",
+      "",
+      "  The defensible claim is per-case, not aggregate — which cases the model",
+      "  diagnosed, what it concluded, and what the control did instead. Run",
+      "  `npm run ablation:cases` for that comparison.",
+    );
+  } else {
+    lines.push(
+      `  attributable to deliberation: ${rupees(delta)}, outside the noise band.`,
+    );
+  }
+
+  lines.push(
     "",
     "  The control uses a generic per-rail playbook rather than stopping, so the",
     "  delta measures deliberation and not the degraded-mode safety rule.",
-  ].join("\n");
+    "",
+    "  Read it for what it is: deliberation against a generic default, not against",
+    "  a hand-written rule set over the same retrieved context. A determined",
+    "  engineer could encode some of this judgement in rules; what the model buys",
+    "  is not having to anticipate every code an issuer might invent.",
+  );
+  return lines.join("\n");
 }

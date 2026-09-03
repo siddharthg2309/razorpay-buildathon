@@ -27,6 +27,15 @@ export interface SpecialistInput {
   language: "en" | "hi" | "hinglish";
   incidentId?: string;
   segmentDegraded?: boolean;
+  /**
+   * Facts retrieved for a case the taxonomy could not classify.
+   *
+   * Without these the model has only an opaque code and is guessing. With them
+   * it has something to weigh — a live mandate against a failed debit, prior
+   * successes against a decline — which is the difference between diagnosis
+   * and pattern-matching a string.
+   */
+  context?: Record<string, unknown>;
 }
 
 export interface SpecialistOutcome<T> {
@@ -70,6 +79,11 @@ export async function diagnose(
     role: "payment_diagnosis",
     instructions: [
       "You classify why a payment collection failed on an Indian payment rail.",
+      "The failure code is opaque and is not in the taxonomy; it rarely indicates the cause.",
+      "Weigh the supplied context instead: mandate state, prior successes, whether the",
+      "balance was sufficient, whether the attempted amount exceeded a mandate cap, and",
+      "whether the segment was degraded. Where the facts conflict, say so in your",
+      "alternatives with honest confidences rather than forcing a single answer.",
       "Return ranked hypotheses with confidences and cite the evidence ids you used.",
       "You have no tools and cannot take any action. Your output is a hypothesis, not a decision.",
       `Known causes: ${[...new Set(taxonomy.entries().map((e) => e.cause))].sort().join(", ")}`,
@@ -78,8 +92,11 @@ export async function diagnose(
       rail: input.rail,
       code: input.code,
       attemptNo: input.attemptNo,
+      amountPaise: input.amountPaise,
       evidenceRefs: input.evidenceRefs,
       knownCodesForRail: taxonomy.codesFor(input.rail),
+      // The code is opaque by construction. These are the facts to reason from.
+      context: input.context ?? {},
     }),
     schema: DIAGNOSIS_SCHEMA as unknown as Record<string, unknown>,
     schemaName: "diagnosis_claim",
