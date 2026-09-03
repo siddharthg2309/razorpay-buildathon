@@ -12,3 +12,5 @@ export * from "./verifier.js";
 export * from "./detector.js";
 export * from "./incident.js";
 export * from "./release-controller.js";
+export * from "./intent-router.js";
+export * from "./checkout-watcher.js";

@@ -22,7 +22,7 @@ Requires Node 22 and a local Postgres.
 ```bash
 npm install
 npm run db:create && npm run db:migrate
-npm run check                          # typecheck, lints, 230 tests
+npm run check                          # typecheck, lints, 242 tests
 npm run batch scenarios/demo.yaml      # 2000 cases under a virtual clock
 npm run console                        # http://localhost:4000
 ```
@@ -33,11 +33,12 @@ No credentials are needed for any of the above.
 |---|---|
 | `npm run batch scenarios/demo.yaml` | Runs the cohort to terminal states, prints the attribution report |
 | `npm run batch scenarios/demo.yaml -- --ablate` | Same seed with deliberation on and off |
-| `npm run console` | Five screens: batch, cases, incidents, policy, attribution |
+| `npm run console` | Six screens: batch, cases, incidents, policy, attribution, metrics |
 | `npm run tui` | The same event stream, in a shell |
 | `npm run verify:replay` | Re-derives every stored revision and every Tier 0 decision |
 | `npm run reset` | Returns the database to empty (~70ms) |
 | `npm run preflight` | Checks Razorpay Test Mode credentials and the webhook secret |
+| `npm run verify:ps` | Audits the build against the problem statement, with evidence per line |
 
 ## What is simulated and what is not
 
@@ -87,6 +88,28 @@ estimate worse; the specified form is the headline and the stratified figure is
 reported beside it.
 
 **Claim the interval, not the point.**
+
+## Verified against the problem statement
+
+`npm run verify:ps` queries a completed batch and the shipped config, and reports
+PASS / PARTIAL / GAP with the evidence behind each line. It is an audit, not a
+checklist: anything that cannot be evidenced is reported as a gap.
+
+```
+PASS 69   PARTIAL 3   GAP 0
+```
+
+The three partials, stated rather than argued away:
+
+- **Reroute to a backup path** is a simulated, approval-only proposal carrying a
+  canary percentage and a TTL. Razorpay exposes no verified routing capability,
+  so executing one would be a claim we cannot back.
+- **Subscription retention** is reported as renewals collected on `/metrics`.
+  `RECOVERED` requires matched money against the renewal obligation, so sending
+  an email cannot satisfy it — but subscription lifecycle state is not modelled
+  separately from the obligation.
+- **Real execution** covers `createPaymentLink` and `fetchPaymentStatus` against
+  Razorpay Test Mode. Every other action is simulated and labelled SIM.
 
 ## Architecture
 
@@ -173,6 +196,9 @@ rejected. Point the webhook at `/webhook` and subscribe to `payment_link.paid`,
 | Every case in a batch reaches a terminal state | `sim.test.ts` |
 | A forged webhook signature is rejected before the body is parsed | `hardening.test.ts` |
 | Every executed row on the case trail carries SIM or LIVE | `console.test.ts` |
+| A promise to pay is recorded as evidence and never as recovered money | `intent-checkout.test.ts` |
+| A briefly paused checkout is not treated as abandoned | `intent-checkout.test.ts` |
+| A session whose payment failed gets payment recovery, not cart messaging | `intent-checkout.test.ts` |
 | No `now()` / `CURRENT_TIMESTAMP` / `Date.now()` outside `Clock` | `npm run lint:clock` |
 
 ## Notes on the build

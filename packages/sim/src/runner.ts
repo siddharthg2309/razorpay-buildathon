@@ -434,9 +434,34 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
     const outcome = tier0.resolve({ domain: sc.domain, rail: sc.rail, code: sc.code, attemptNo: 0 });
     if (outcome.resolved) {
       stats.tier0++;
+      // A Tier 0 diagnosis is still a diagnosis: it carries a cause, a
+      // confidence and the evidence it cites, and the audit trail asks for all
+      // three per case. Writing it as a claim also keeps the blackboard the one
+      // place a diagnosis lives, rather than only holding model-produced ones.
+      await blackboard.writeClaim({
+        id: randomUUID(),
+        caseId: sc.caseId,
+        revision: 1,
+        role: "payment_diagnosis",
+        confidence: outcome.classification.confidence,
+        payload: {
+          primaryCause: outcome.classification.cause,
+          ruleId: outcome.classification.ruleId,
+          hardness: outcome.classification.hardness,
+          retryPermitted: outcome.classification.retryPermitted,
+          tier: 0,
+        },
+        evidenceRefs: [evidenceId],
+      });
+      await recordDiagnosis(sc, outcome.classification.cause);
       await ledger.append({
         caseId: sc.caseId, actor: "tier0", eventType: "plan_selected",
-        payload: { ruleId: outcome.plan.ruleId, cause: outcome.classification.cause, tier: 0 },
+        payload: {
+          ruleId: outcome.plan.ruleId,
+          cause: outcome.classification.cause,
+          confidence: outcome.classification.confidence,
+          tier: 0,
+        },
       });
       await startPlan(sc, outcome.plan.steps.map((st) => ({ actionId: st.actionId, params: st.params })), 0, startDelayMs);
       return;
@@ -478,6 +503,7 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       // stop safely. A provider outage must never manufacture a generic
       // recovery action, but it must not silently drop the case either.
       stats.degraded++;
+      await recordDiagnosis(sc, "undiagnosed_degraded");
       await ledger.append({
         caseId: sc.caseId, actor: "runtime", eventType: "degraded_escalation",
         payload: { degraded: true, reason: "no diagnosis claim available", tier: 2 },
@@ -495,6 +521,7 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       context: run.claims.context ?? { intent: "unknown", optedOut: false, language: "en", priorContacts: 0 },
       incident: run.claims.incident ?? { attach: false, incidentId: null, suppress: false, rationale: "" },
     });
+    await recordDiagnosis(sc, strategy.selectedCause);
     if (strategy.suppress || strategy.stopReason) return;
 
     const economics = valueActions(
@@ -637,6 +664,14 @@ export async function runBatch(opts: BatchOptions): Promise<BatchReport> {
       if (stats.errorSamples.length < 5) stats.errorSamples.push((err as Error).message);
       remainingSteps.delete(sc.caseId);
     }
+  }
+
+  /** Denormalise the diagnosis onto the case so breakdowns are a plain query. */
+  async function recordDiagnosis(sc: SyntheticCase, cause: string): Promise<void> {
+    await getPool().query(
+      "UPDATE cases SET cause = $2, rail = $3, gateway = $4, issuer = $5 WHERE id = $1",
+      [sc.caseId, cause, sc.rail, sc.gateway, sc.issuer],
+    );
   }
 
   async function currentRevision(caseId: string) {

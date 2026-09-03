@@ -5,6 +5,7 @@ import { caseScreen, casesScreen } from "./screens/cases.js";
 import { incidentsScreen } from "./screens/incidents.js";
 import { policyScreen } from "./screens/policy.js";
 import { attributionScreen } from "./screens/attribution.js";
+import { metricsScreen } from "./screens/metrics.js";
 import { streamScreen } from "./screens/stream.js";
 import { sse } from "./stream.js";
 import { page, panel } from "./render.js";
@@ -30,6 +31,7 @@ const server = createServer((req, res) => {
       else if (path === "/incidents") html = await incidentsScreen();
       else if (path === "/policy") html = await policyScreen();
       else if (path === "/attribution") html = await attributionScreen();
+      else if (path === "/metrics") html = await metricsScreen();
       else if (path === "/stream") html = streamScreen();
       else {
         res.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });

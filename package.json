@@ -23,7 +23,8 @@
     "reset": "tsx scripts/reset.ts",
     "verify:replay": "tsx scripts/verify-replay.ts",
     "preflight": "tsx scripts/preflight.ts",
-    "check": "tsc -b --pretty false && tsx scripts/lint-clock.ts && tsx scripts/coverage.ts && vitest run"
+    "check": "tsc -b --pretty false && tsx scripts/lint-clock.ts && tsx scripts/coverage.ts && vitest run",
+    "verify:ps": "tsx scripts/verify-ps.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
