@@ -1,7 +1,7 @@
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { loadConfig } from "@rra/core";
 import { closePool, getPool } from "@rra/db";
-import { generateCohort, loadScenario, parseScenario, runBatch, World, renderReport } from "@rra/sim";
+import { generateCohort, loadScenario, parseScenario, runBatch, World, renderReport, type BatchReport } from "@rra/sim";
 
 const config = loadConfig();
 const scenario = loadScenario("scenarios/demo.yaml");
@@ -9,15 +9,29 @@ const scenario = loadScenario("scenarios/demo.yaml");
 /** A small cohort so the integration test stays fast but stays real. */
 const small = { ...scenario, size: 300 };
 
-beforeEach(async () => {
-  await getPool().query(
-    `TRUNCATE claim_cache, attribution_runs, incident_members, incidents, segment_windows, segment_baselines,
-              settlements, action_attempts, token_burns, capability_tokens, policy_decisions,
-              contact_budgets, claims, agent_runs, scheduled_actions, obligation_locks,
-              case_revisions, case_events, evidence, ledger, cases, obligations, customers,
-              merchants CASCADE`,
-  );
-});
+const TRUNCATE = `TRUNCATE claim_cache, attribution_runs, incident_members, incidents,
+    segment_windows, segment_baselines, promises_to_pay, checkout_sessions, settlements,
+    action_attempts, token_burns, capability_tokens, policy_decisions, contact_budgets,
+    claims, agent_runs, scheduled_actions, obligation_locks, case_revisions, case_events,
+    evidence, ledger, cases, obligations, customers, merchants CASCADE`;
+
+const wipe = () => getPool().query(TRUNCATE);
+
+/**
+ * One shared batch for everything that inspects an ordinary run.
+ *
+ * Ten separate runs of the same 300-case scenario were being made to assert ten
+ * different properties of what is, by construction, the same run. Sharing it
+ * costs nothing in coverage and takes most of the time out of the suite. Tests
+ * that genuinely need a different world still run their own.
+ */
+let shared: BatchReport;
+
+beforeAll(async () => {
+  await wipe();
+  shared = await runBatch({ scenario: small, arm: "full", provider: null });
+}, 120_000);
+
 afterAll(async () => { await closePool(); });
 
 describe("scenario", () => {
@@ -103,8 +117,8 @@ describe("world", () => {
 });
 
 describe("batch runner", () => {
-  it("runs a cohort end to end and produces a defensible number", async () => {
-    const report = await runBatch({ scenario: small, arm: "full", provider: null });
+  it("runs a cohort end to end and produces a defensible number", () => {
+    const report = shared;
 
     expect(report.cases).toBe(300);
     // Every case reaches a terminal state — none left mid-flight.
@@ -129,16 +143,14 @@ describe("batch runner", () => {
     expect(report.attribution.grossRecoveredPaise).toBeGreaterThanOrEqual(
       report.attribution.incrementalPaise,
     );
-  }, 120_000);
+  });
 
   it("produces identical output for the same seed", async () => {
-    const first = await runBatch({ scenario: small, arm: "full", provider: null });
-    await getPool().query(
-      `TRUNCATE claim_cache, attribution_runs, settlements, action_attempts, token_burns, capability_tokens,
-                policy_decisions, contact_budgets, claims, agent_runs, scheduled_actions,
-                obligation_locks, case_revisions, case_events, evidence, ledger, cases,
-                obligations, customers, merchants CASCADE`,
-    );
+    // Re-runs against the shared one. The second run reproduces the first
+    // byte for byte, so it leaves the database in the state the other tests
+    // expect and no restoration is needed.
+    const first = shared;
+    await wipe();
     const second = await runBatch({ scenario: small, arm: "full", provider: null });
 
     expect(second.attribution.treatedN).toBe(first.attribution.treatedN);
@@ -148,31 +160,29 @@ describe("batch runner", () => {
     expect(second.terminalStates).toEqual(first.terminalStates);
   }, 180_000);
 
-  it("escalates rather than dropping cases when no provider is available", async () => {
-    const report = await runBatch({ scenario: small, arm: "full", provider: null });
+  it("escalates rather than dropping cases when no provider is available", () => {
+    const report = shared;
     // The unmapped slice reaches Tier 1 and, with no provider, must escalate —
     // a model outage may not silently discard the case.
     expect(report.tier1Escalated).toBeGreaterThan(0);
     expect(report.degradedEscalations).toBe(report.tier1Escalated);
-  }, 120_000);
+  });
 
   it("persists the run for the console to read back", async () => {
-    await runBatch({ scenario: small, arm: "full", provider: null });
     const { rows } = await getPool().query<{ arm: string; treated_n: number }>(
       "SELECT arm, treated_n FROM attribution_runs",
     );
     expect(rows).toHaveLength(1);
     expect(rows[0]?.arm).toBe("full");
-  }, 120_000);
+  });
 
-  it("renders a report a judge can read without narration", async () => {
-    const report = await runBatch({ scenario: small, arm: "full", provider: null });
-    const text = renderReport(report);
+  it("renders a report a judge can read without narration", () => {
+    const text = renderReport(shared);
     expect(text).toContain("GROSS");
     expect(text).toContain("EST. INCREMENTAL");
     expect(text).toContain("TRUE (SIM)");
     expect(text).toContain("interval contains ground truth");
-  }, 120_000);
+  });
 });
 
 describe("the agentic machinery actually runs", () => {
@@ -184,7 +194,7 @@ describe("the agentic machinery actually runs", () => {
    * A component that only works in its own test is not part of the product.
    */
   it("exercises the optimizer, reactive loop and intent path on a real batch", async () => {
-    const report = await runBatch({ scenario: small, arm: "full", provider: null });
+    const report = shared;
 
     // Explainable next-best action, on every case rather than the Tier 1 few.
     expect(report.optimizerDecisions).toBeGreaterThan(0);
@@ -199,22 +209,44 @@ describe("the agentic machinery actually runs", () => {
 
     // The mandate sequencer decides ordering on the rails that carry one.
     expect(report.mandateSequences).toBeGreaterThan(0);
-  }, 180_000);
+  });
 
-  it("defers a contact blocked by quiet hours instead of killing the plan", async () => {
-    // Asserted on a scenario that forces the case rather than on the demo
-    // cohort, where whether any contact happens to fall in quiet hours is an
-    // accident of the stagger and not something to hang a test on.
-    const nocturnal = { ...small, seed: 8675309, size: 400 };
-    const report = await runBatch({ scenario: nocturnal, arm: "full", provider: null });
-    // Either some were deferred, or none were blocked at all — what must never
-    // happen is a block that silently ends the plan.
-    expect(report.quietHoursDeferrals).toBeGreaterThanOrEqual(0);
-    expect(report.stepErrors).toBe(0);
-  }, 180_000);
+  it("never lets a quiet-hours block silently end a case", async () => {
+    // The previous version asserted deferrals >= 0, which is true of any
+    // number and therefore checked nothing. What matters is that a deferred
+    // case goes somewhere: it either gets contacted once contact is allowed,
+    // or it reaches a terminal state. Stalling forever is the failure.
+    const { rows } = await getPool().query<{ stalled: string }>(
+      `WITH deferred AS (
+         SELECT DISTINCT case_id FROM ledger WHERE event_type = 'deferred_for_quiet_hours'
+       )
+       SELECT count(*) AS stalled FROM deferred d JOIN cases c ON c.id = d.case_id
+        WHERE c.closed_at IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM action_attempts a
+             WHERE a.case_id = d.case_id AND a.sent_at > (
+               SELECT min(l.ts) FROM ledger l
+                WHERE l.case_id = d.case_id AND l.event_type = 'deferred_for_quiet_hours')
+          )`,
+    );
+    expect(Number(rows[0]!.stalled)).toBe(0);
+    expect(shared.stepErrors).toBe(0);
+  });
+
+  it("sends no contact inside quiet hours, whatever the deferral count", async () => {
+    // The compliance property itself, rather than a count of deferrals.
+    const { rows } = await getPool().query<{ ist_hour: string }>(
+      `SELECT DISTINCT to_char(a.sent_at AT TIME ZONE 'Asia/Kolkata', 'HH24') AS ist_hour
+         FROM action_attempts a
+        WHERE a.action_id IN ('send_approved_template', 'place_approved_voice_call')`,
+    );
+    for (const r of rows) {
+      const hour = Number(r.ist_hour);
+      expect(hour >= 9 && hour < 21).toBe(true);
+    }
+  });
 
   it("records promises as evidence and resumes collection when they break", async () => {
-    await runBatch({ scenario: small, arm: "full", provider: null });
     const { rows } = await getPool().query<{ state: string; n: string }>(
       "SELECT state, count(*) AS n FROM promises_to_pay GROUP BY state",
     );
@@ -228,7 +260,7 @@ describe("the agentic machinery actually runs", () => {
           AND NOT EXISTS (SELECT 1 FROM settlements s WHERE s.obligation_id = c.obligation_id)`,
     );
     expect(Number(bad[0]!.n)).toBe(0);
-  }, 180_000);
+  });
 });
 
 describe("repeated customer replies", () => {
@@ -240,6 +272,7 @@ describe("repeated customer replies", () => {
       seed: 4242,
       world: { ...small.world, replyRate: 0.9 },
     };
+    await wipe();
     await expect(runBatch({ scenario: chatty, arm: "full", provider: null }))
       .resolves.toBeDefined();
     const { rows } = await getPool().query<{ n: string }>(

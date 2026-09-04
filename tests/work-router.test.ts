@@ -53,11 +53,17 @@ describe("role registry", () => {
     }
   });
 
-  it("bounds every role with a timeout and a call budget", () => {
+  it("bounds every role with a timeout, and ties its budget to its permission", () => {
     for (const id of ROLE_IDS) {
-      expect(ROLE_REGISTRY[id].timeoutMs).toBeGreaterThan(0);
-      expect(ROLE_REGISTRY[id].callBudget).toBeGreaterThanOrEqual(0);
-      expect(ROLE_REGISTRY[id].dependsOn.length).toBeGreaterThan(0);
+      const role = ROLE_REGISTRY[id];
+      expect(role.timeoutMs).toBeGreaterThan(0);
+      expect(role.dependsOn.length).toBeGreaterThan(0);
+      // The previous assertion was callBudget >= 0, which holds for every
+      // count and so checked nothing. What matters is that the budget agrees
+      // with the permission: a role forbidden a provider must have none, and a
+      // role allowed one must have some, or the contract is decorative.
+      if (role.mayUseProvider) expect(role.callBudget).toBeGreaterThan(0);
+      else expect(role.callBudget).toBe(0);
     }
   });
 });

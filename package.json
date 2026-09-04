@@ -32,7 +32,8 @@
     "demo": "node --env-file-if-exists=.env --import tsx scripts/demo.ts",
     "lab:estimator": "node --env-file-if-exists=.env --import tsx scripts/estimator-lab.ts",
     "lab:sweep": "node --env-file-if-exists=.env --import tsx scripts/estimator-sweep.ts",
-    "verify:provider": "node --env-file-if-exists=.env --import tsx scripts/verify-provider.ts"
+    "verify:provider": "node --env-file-if-exists=.env --import tsx scripts/verify-provider.ts",
+    "test:mutation": "node --env-file-if-exists=.env --import tsx scripts/mutation-check.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

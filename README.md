@@ -43,6 +43,7 @@ No credentials are needed for any of the above.
 | `npm run verify:provider` | Confirms the configured backend works, without printing the key |
 | `npm run demo` | One command: reset, console, batch, and what to show in order |
 | `npm run lab:sweep` | Compares estimators against ground truth across seeds |
+| `npm run test:mutation` | Breaks safety properties on purpose to check the suite notices |
 
 ## What is simulated and what is not
 
@@ -234,6 +235,18 @@ before parsing the body, deduplicates on the Razorpay entity id so a retried
 delivery is a no-op, answers 401 rather than 400 on a bad signature so Razorpay
 stops retrying a forged one, and acknowledges immediately rather than holding
 the connection open while the engine works.
+
+## Does the suite have teeth?
+
+A green suite proves the tests pass, not that they would notice if the product
+broke. `npm run test:mutation` breaks ten safety properties on purpose — quiet
+hours stop blocking, tokens stop being burned, `RECOVERED` stops requiring
+matched money — and reports any that survive. A survivor is not a failing test;
+it is a property nobody is checking.
+
+```
+10/10 caught
+```
 
 ## Invariants the tests enforce
 
