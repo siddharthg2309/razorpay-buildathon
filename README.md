@@ -40,7 +40,7 @@ No credentials are needed for any of the above.
 | `npm run preflight` | Checks Razorpay Test Mode credentials and the webhook secret |
 | `npm run verify:ps` | Audits the build against the problem statement, with evidence per line |
 | `npm run live-case` | Runs one case against real Razorpay Test Mode, end to end |
-| `npm run verify:openai` | Confirms the key works without printing it |
+| `npm run verify:provider` | Confirms the configured backend works, without printing the key |
 | `npm run demo` | One command: reset, console, batch, and what to show in order |
 | `npm run lab:sweep` | Compares estimators against ground truth across seeds |
 
@@ -153,20 +153,37 @@ a chain of prompts, is the product.
 
 ## Configuration
 
-### OpenAI
+### The LLM provider
 
-Paste the key straight into `.env` on the `OPENAI_API_KEY=` line — never through
-a chat window, a commit, or a shell command, all of which keep history. The file
-is gitignored and `chmod 600`.
+Paste the key straight into `.env` on the `OPENROUTER_API_KEY=` line — never
+through a chat window, a commit, or a shell command, all of which keep history.
+The file is gitignored and `chmod 600`.
 
 ```bash
-npm run verify:openai        # checks shape, then makes one throwaway call
+npm run verify:provider      # shape, then the model catalogue, then one call
 ```
 
 It reports a length, a prefix and a boolean — never the key. Provider errors are
 redacted before printing, because they sometimes echo request context.
 
-`OPENAI_API_KEY` is **optional**. Without it Tier 0 still carries ~95% of cases;
+Two backends are supported behind one `LLMProvider` seam. OpenRouter speaks
+Chat Completions and OpenAI speaks the Responses API, so they are separate
+adapters rather than a base-url swap. OpenRouter wins when both keys are set: a
+leftover OpenAI key should not silently override the backend you just chose.
+
+Models are configuration, per role:
+
+```
+MODEL_DIAGNOSIS=openai/gpt-4o-mini
+MODEL_CONTEXT=openai/gpt-4o-mini
+MODEL_REDUCER=openai/gpt-4o-mini
+```
+
+Any model with structured-output support will do. One without it returns prose,
+which fails schema validation here rather than reaching the claim board — so an
+unstructured model cannot be used, by construction.
+
+A provider is **optional**. Without it Tier 0 still carries ~95% of cases;
 Tier 1 falls into degraded mode and escalates to a human rather than
 manufacturing a generic action, and the ablation reports that it cannot measure
 anything rather than printing a meaningless delta.

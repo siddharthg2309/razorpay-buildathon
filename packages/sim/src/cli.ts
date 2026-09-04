@@ -1,6 +1,6 @@
 import { RealClock } from "@rra/core";
 import { closePool, getPool } from "@rra/db";
-import { CachedProvider, OpenAIResponsesProvider, type LLMProvider } from "@rra/agents";
+import { selectProvider, type LLMProvider } from "@rra/agents";
 import { loadScenario } from "./scenario.js";
 import { runBatch } from "./runner.js";
 import { renderAblation, renderReport } from "./report.js";
@@ -36,19 +36,15 @@ const scenario = loadScenario(path);
 // The provider is optional. Without one the engine still runs end to end — Tier
 // 0 handles ~95% of cases — but Tier 1 falls into degraded mode, and the
 // ablation cannot measure anything.
-// Cached by default so a rehearsal reproduces exactly and costs nothing.
-// NO_CLAIM_CACHE=1 forces fresh calls.
-const clock = new RealClock();
-const provider: LLMProvider | null = process.env["OPENAI_API_KEY"]
-  ? new CachedProvider(
-      new OpenAIResponsesProvider(clock),
-      clock,
-      !process.env["NO_CLAIM_CACHE"],
-    )
-  : null;
+// Whichever backend is configured. Cached by default so a rehearsal
+// reproduces exactly and costs nothing; NO_CLAIM_CACHE=1 forces fresh calls.
+const selected = selectProvider(new RealClock());
+const provider: LLMProvider | null = selected.provider;
 
 console.log(`running ${scenario.size} cases, seed ${scenario.seed}, holdout ${scenario.holdout * 100}%`);
-console.log(provider ? "provider: openai\n" : "provider: none — Tier 1 will run degraded\n");
+console.log(provider
+  ? `provider: ${selected.kind} (${selected.models.diagnosis})${selected.cached ? " + claim cache" : ""}\n`
+  : "provider: none — Tier 1 will run degraded\n");
 
 await reset();
 

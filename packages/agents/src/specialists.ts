@@ -61,7 +61,7 @@ export async function diagnose(
   input: SpecialistInput,
   taxonomy: DeclineTaxonomy,
   provider: LLMProvider | null,
-  model = "gpt-5.6-terra",
+  model = process.env["MODEL_DIAGNOSIS"] ?? "gpt-5.6-terra",
 ): Promise<SpecialistOutcome<DiagnosisClaim>> {
   const known = taxonomy.classify(input.rail, input.code, input.attemptNo);
   if (known) {
@@ -126,7 +126,7 @@ export async function diagnose(
 export async function readContext(
   input: SpecialistInput,
   provider: LLMProvider | null,
-  model = "gpt-5.6-luna",
+  model = process.env["MODEL_CONTEXT"] ?? "gpt-5.6-luna",
 ): Promise<SpecialistOutcome<ContextClaim>> {
   const base: ContextClaim = {
     intent: "unknown",

@@ -37,7 +37,7 @@ const MATERIAL_MARGIN = 0.15;
 export class DeliberationReducer {
   constructor(
     private readonly provider: LLMProvider | null = null,
-    private readonly model = "gpt-5.6-terra",
+    private readonly model = process.env["MODEL_REDUCER"] ?? "gpt-5.6-terra",
   ) {}
 
   async reduce(input: ReducerInput): Promise<Strategy> {

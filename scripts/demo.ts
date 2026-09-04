@@ -9,7 +9,7 @@
 import { spawn } from "node:child_process";
 import { closePool, getPool } from "@rra/db";
 import { loadScenario, runBatch, renderAblation, renderReport } from "@rra/sim";
-import { CachedProvider, OpenAIResponsesProvider, type LLMProvider } from "@rra/agents";
+import { selectProvider, type LLMProvider } from "@rra/agents";
 import { RealClock } from "@rra/core";
 
 const ablate = process.argv.includes("--ablate");
@@ -54,18 +54,12 @@ console.log(`  leave it open — the stream is live while the batch runs`);
 
 rule("3 · batch");
 const scenario = loadScenario(scenarioPath);
-// Cached by default so a rehearsal reproduces exactly and costs nothing.
-// NO_CLAIM_CACHE=1 forces fresh calls.
-const clock = new RealClock();
-const provider: LLMProvider | null = process.env["OPENAI_API_KEY"]
-  ? new CachedProvider(
-      new OpenAIResponsesProvider(clock),
-      clock,
-      !process.env["NO_CLAIM_CACHE"],
-    )
-  : null;
+// Whichever backend is configured. Cached by default so a rehearsal
+// reproduces exactly and costs nothing; NO_CLAIM_CACHE=1 forces fresh calls.
+const selected = selectProvider(new RealClock());
+const provider: LLMProvider | null = selected.provider;
 console.log(`  ${scenario.size} cases · seed ${scenario.seed} · holdout ${scenario.holdout * 100}%`);
-console.log(`  provider: ${provider ? "openai" : "none (Tier 1 will run degraded)"}\n`);
+console.log(`  provider: ${provider ? `${selected.kind} (${selected.models.diagnosis})` : "none (Tier 1 will run degraded)"}\n`);
 
 let control;
 if (ablate) {

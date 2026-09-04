@@ -28,11 +28,11 @@
     "live-case": "node --env-file-if-exists=.env --import tsx scripts/live-case.ts",
     "settle-live": "node --env-file-if-exists=.env --import tsx scripts/settle-live.ts",
     "adopt-live": "node --env-file-if-exists=.env --import tsx scripts/adopt-live.ts",
-    "verify:openai": "node --env-file-if-exists=.env --import tsx scripts/verify-openai.ts",
     "ablation:cases": "node --env-file-if-exists=.env --import tsx scripts/ablation-cases.ts",
     "demo": "node --env-file-if-exists=.env --import tsx scripts/demo.ts",
     "lab:estimator": "node --env-file-if-exists=.env --import tsx scripts/estimator-lab.ts",
-    "lab:sweep": "node --env-file-if-exists=.env --import tsx scripts/estimator-sweep.ts"
+    "lab:sweep": "node --env-file-if-exists=.env --import tsx scripts/estimator-sweep.ts",
+    "verify:provider": "node --env-file-if-exists=.env --import tsx scripts/verify-provider.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

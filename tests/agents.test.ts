@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ROLE_IDS, VirtualClock, loadConfig, type RoleId } from "@rra/core";
 import { closePool, getPool, Ledger } from "@rra/db";
 import { Blackboard, CaseManager } from "@rra/engine";
@@ -465,5 +465,96 @@ describe("claim cache", () => {
     await off.complete(req);
     await off.complete(req);
     expect(inner.calls).toHaveLength(2);
+  });
+});
+
+describe("provider selection", () => {
+  const saved = { ...process.env };
+  afterEach(() => {
+    process.env["OPENROUTER_API_KEY"] = saved["OPENROUTER_API_KEY"];
+    process.env["OPENAI_API_KEY"] = saved["OPENAI_API_KEY"];
+  });
+
+  it("prefers OpenRouter when both keys are present", async () => {
+    const { selectProvider } = await import("@rra/agents");
+    process.env["OPENROUTER_API_KEY"] = "sk-or-test";
+    process.env["OPENAI_API_KEY"] = "sk-test";
+    // The one configured deliberately wins; a leftover OpenAI key must not
+    // silently override the backend just chosen.
+    expect(selectProvider(new VirtualClock(T0)).kind).toBe("openrouter");
+  });
+
+  it("falls back to OpenAI, then to no provider at all", async () => {
+    const { selectProvider } = await import("@rra/agents");
+    process.env["OPENROUTER_API_KEY"] = "";
+    process.env["OPENAI_API_KEY"] = "sk-test";
+    expect(selectProvider(new VirtualClock(T0)).kind).toBe("openai");
+
+    process.env["OPENAI_API_KEY"] = "";
+    const none = selectProvider(new VirtualClock(T0));
+    // Null, not a throw: the engine runs without a provider and Tier 1
+    // escalates. A missing key is a reduced demo, not a broken one.
+    expect(none.kind).toBe("none");
+    expect(none.provider).toBeNull();
+  });
+
+  it("uses vendor-prefixed model ids on OpenRouter and bare ones on OpenAI", async () => {
+    const { modelsFor } = await import("@rra/agents");
+    expect(modelsFor("openrouter").diagnosis).toContain("/");
+    expect(modelsFor("openai").diagnosis).not.toContain("/");
+  });
+});
+
+describe("OpenRouter provider", () => {
+  const req = {
+    role: "customer_context" as const,
+    instructions: "extract intent", input: "will pay friday",
+    schema: { type: "object" }, schemaName: "context_claim", schemaVersion: "1",
+    model: "openai/gpt-4o-mini", effort: "none" as const,
+    cacheKey: "k", timeoutMs: 5000,
+  };
+
+  it("posts chat completions with a strict json schema", async () => {
+    const { OpenRouterProvider } = await import("@rra/agents");
+    let seen: Record<string, unknown> = {};
+    const fake = (async (_url: string | URL | Request, init?: RequestInit) => {
+      seen = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(
+        JSON.stringify({ id: "gen-1", choices: [{ message: { content: '{"intent":"will_pay"}' } }], usage: { prompt_tokens: 40, completion_tokens: 8 } }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    const res = await new OpenRouterProvider(new VirtualClock(T0), { apiKey: "sk-or-x", fetchImpl: fake })
+      .complete<{ intent: string }>(req);
+
+    expect(res.value.intent).toBe("will_pay");
+    expect(res.provider).toBe("openrouter");
+    const format = (seen["response_format"] as { type: string; json_schema: { strict: boolean } });
+    // Strict schema output is what keeps prose out of the claim board.
+    expect(format.type).toBe("json_schema");
+    expect(format.json_schema.strict).toBe(true);
+  });
+
+  it("rejects prose rather than passing it on as a claim", async () => {
+    const { OpenRouterProvider, SchemaValidationError } = await import("@rra/agents");
+    const fake = (async () =>
+      new Response(JSON.stringify({ choices: [{ message: { content: "Sure! The customer will pay." } }] }), { status: 200 })
+    ) as unknown as typeof fetch;
+
+    await expect(
+      new OpenRouterProvider(new VirtualClock(T0), { apiKey: "sk-or-x", fetchImpl: fake }).complete(req),
+    ).rejects.toThrow(SchemaValidationError);
+  });
+
+  it("carries the provider's own error through, so 402 and 404 stay distinguishable", async () => {
+    const { OpenRouterProvider } = await import("@rra/agents");
+    const fake = (async () =>
+      new Response(JSON.stringify({ error: { message: "Insufficient credits", code: 402 } }), { status: 402 })
+    ) as unknown as typeof fetch;
+
+    await expect(
+      new OpenRouterProvider(new VirtualClock(T0), { apiKey: "sk-or-x", fetchImpl: fake }).complete(req),
+    ).rejects.toThrow(/402.*Insufficient credits/);
   });
 });
