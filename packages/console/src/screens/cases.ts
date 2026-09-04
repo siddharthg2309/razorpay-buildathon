@@ -1,71 +1,91 @@
 import { caseList, caseTrail } from "../queries.js";
-import { esc, page, panel, rel, rupees, surfaceTag, table } from "../render.js";
+import { esc, head, hint, measure, measures, page, rel, rupees, section, surfaceTag, table } from "../render.js";
 
-/** Case list — the way into Screen 2. */
+const FILTERS = ["", "RECOVERED", "UNRECOVERABLE", "OPTED_OUT", "DISPUTED", "SUPPRESSED_BY_INCIDENT"] as const;
+
 export async function casesScreen(filter?: string): Promise<string> {
   const rows = await caseList(150, filter);
+
+  const nav = FILTERS.map((f) => {
+    const on = filter === f || (!filter && !f);
+    return `<a href="/cases${f ? `?state=${f}` : ""}" class="mark${on ? " on" : ""}">${f ? f.replace(/_/g, " ").toLowerCase() : "all"}</a>`;
+  }).join(" ");
+
   const body = table(
-    ["case", "domain", "tier", "arm", "amount", "state"],
+    ["case", "domain", "tier", "arm", "at risk", "outcome"],
     rows.map((c) => [
-      `<a href="/case/${esc(c.id)}">${esc(c.id)}</a>`,
-      `<span class="dim">${esc(c.domain)}</span>`,
-      `<span class="tag t${c.tier}">T${c.tier}</span>`,
-      c.holdout ? `<span class="tag">HOLDOUT</span>` : `<span class="dim">treated</span>`,
+      `<a href="/case/${esc(c.id)}" class="mono">${esc(c.id)}</a>`,
+      esc(c.domain.replace(/_/g, " ")),
+      `<span class="mono">T${c.tier}</span>`,
+      c.holdout ? `<span class="mark">held back</span>` : `<span class="mono">treated</span>`,
       rupees(Number(c.amount)),
-      `<span class="state-${c.state}">${esc(c.state)}</span>`,
+      `<span class="state state-${c.state}">${esc(c.state.replace(/_/g, " "))}</span>`,
     ]),
     [4],
   );
-  const filters = ["", "RECOVERED", "UNRECOVERABLE", "OPTED_OUT", "DISPUTED", "SUPPRESSED_BY_INCIDENT"]
-    .map((f) => `<a href="/cases${f ? `?state=${f}` : ""}"${filter === f || (!filter && !f) ? ' class="on"' : ""}>${f || "all"}</a>`)
-    .join(" · ");
-  return page("cases", "cases", `<h1>Cases</h1><p class="note">${filters}</p>${body}`);
+
+  return page(
+    "cases",
+    "cases",
+    `${head("Cases", "Every obligation the agent opened. Open one to read what it did and why.")}
+     <div style="margin-bottom:26px">${nav}</div>
+     ${body}`,
+  );
 }
 
+/** Steps that carry the audit weight, emphasised in the trail. */
+const KEY_STEPS = new Set(["POLICY", "TOKEN", "EXECUTE", "SETTLEMENT", "TERMINAL_REACHED"]);
+
 /**
- * Screen 2 — the trust screen.
+ * One case, end to end.
  *
- * The complete decision trail, top to bottom, nothing hidden. Every executed
- * row carries a SIM or LIVE badge: this is the screen that proves the honesty
- * claim, so it must never show a simulated action as though it were real.
+ * This is the screen the audit-trail requirement rests on, so it is a reading
+ * surface rather than a dashboard: a single column, in order, nothing hidden
+ * and nothing summarised.
  */
 export async function caseScreen(caseId: string): Promise<string> {
   const { header, origin, entries } = await caseTrail(caseId);
-  if (!header) return page("case", "cases", panel("not found", `<p class="note">No case ${esc(caseId)}.</p>`));
+  if (!header) {
+    return page("case", "cases", head("Not found", `No case <code>${esc(caseId)}</code>.`));
+  }
 
   const h = header as Record<string, unknown>;
-  const meta = `<div class="kpis">
-    <div class="kpi"><div class="v">${rupees(Number(h["amount_paise"]))}</div><div class="k">at risk</div></div>
-    <div class="kpi"><div class="v state-${esc(h["state"])}">${esc(h["state"])}</div><div class="k">state</div>
-      ${h["terminal_reason"] ? `<div class="sub">${esc(h["terminal_reason"])}</div>` : ""}</div>
-    <div class="kpi"><div class="v">T${esc(h["tier"])}</div><div class="k">tier</div></div>
-    <div class="kpi"><div class="v">${h["holdout_flag"] ? "HOLDOUT" : "TREATED"}</div><div class="k">arm</div>
-      <div class="sub">${h["holdout_flag"] ? "never acted on" : "agent active"}</div></div>
-  </div>`;
+  const state = String(h["state"]);
 
-  let lastKind = "";
   const trail = entries
-    .map((e) => {
-      const sep = lastKind && lastKind !== e.kind ? "" : "";
-      lastKind = e.kind;
-      return `<tr class="${sep}">
+    .map(
+      (e) => `<tr${KEY_STEPS.has(e.kind) ? ' class="key"' : ""}>
         <td class="t">${rel(e.ts, origin)}</td>
-        <td class="ev">${esc(e.kind)}</td>
+        <td class="ev">${esc(e.kind.replace(/_/g, " "))}</td>
         <td class="d">${e.surface ? `${surfaceTag(e.surface)} ` : ""}${esc(e.detail)}</td>
-      </tr>`;
-    })
+      </tr>`,
+    )
     .join("");
 
   return page(
     `case ${caseId}`,
     "cases",
-    `<h1>Case ${esc(caseId)} · obligation ${esc(h["obligation_id"])} · ${esc(h["domain"])}</h1>
-     ${meta}
-     <div class="panel" style="margin-top:16px">
-       <div class="hd">decision trail — every decision and side effect, in order</div>
-       <div class="scroll"><table class="trail"><tbody>${trail}</tbody></table></div>
-     </div>
-     <p class="mono-sm">SIM marks an action executed against the simulator. LIVE marks one
-     executed against Razorpay Test Mode. Nothing else in this trail is inferred.</p>`,
+    `${head(
+      esc(caseId),
+      `${esc(String(h["domain"]).replace(/_/g, " "))} · obligation <code>${esc(h["obligation_id"])}</code>`,
+    )}
+     ${measures([
+       measure(rupees(Number(h["amount_paise"])), "at risk"),
+       measure(
+         state.replace(/_/g, " "),
+         "outcome",
+         h["terminal_reason"] ? esc(h["terminal_reason"]) : "",
+         state !== "RECOVERED",
+       ),
+       measure(`Tier ${h["tier"]}`, "decided by", h["tier"] === 0 ? "taxonomy, no model" : "specialists"),
+       measure(h["holdout_flag"] ? "held back" : "treated", "arm",
+         h["holdout_flag"] ? "never contacted" : "agent acted", Boolean(h["holdout_flag"])),
+     ])}
+     ${section("what happened, in order", `<div class="scroll"><table class="trail"><tbody>${trail}</tbody></table></div>`)}
+     ${hint(
+       `<span class="mark live">LIVE</span> marks an action executed against Razorpay Test Mode.
+        <span class="mark">SIM</span> marks one executed against the simulator. Nothing in this
+        trail is inferred after the fact — each line was written when it happened.`,
+     )}`,
   );
 }

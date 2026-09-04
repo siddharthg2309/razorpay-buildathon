@@ -10,7 +10,7 @@ import { ablationScreen } from "./screens/ablation.js";
 import { streamScreen } from "./screens/stream.js";
 import { sse } from "./stream.js";
 import { handleWebhook } from "./webhook-route.js";
-import { page, panel } from "./render.js";
+import { head, page } from "./render.js";
 
 const PORT = Number(process.env["PORT"] ?? 4000);
 
@@ -47,7 +47,7 @@ const server = createServer((req, res) => {
       else if (path === "/stream") html = streamScreen();
       else {
         res.writeHead(404, { "Content-Type": "text/html; charset=utf-8" });
-        res.end(page("not found", "", panel("404", "<p class='note'>No such screen.</p>")));
+        res.end(page("not found", "", head("Not found", "No such screen.")));
         return;
       }
 
@@ -57,7 +57,7 @@ const server = createServer((req, res) => {
       // Surface the error rather than a blank page — on stage a visible stack
       // beats a screen that silently shows nothing.
       res.writeHead(500, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(page("error", "", panel("server error", `<pre>${String((err as Error).stack ?? err)}</pre>`)));
+      res.end(page("error", "", head("Something broke", "The stack is below, rather than a blank page.") + `<pre>${String((err as Error).stack ?? err)}</pre>`));
     }
   })();
 });

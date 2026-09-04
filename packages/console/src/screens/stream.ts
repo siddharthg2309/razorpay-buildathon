@@ -1,13 +1,13 @@
-import { page } from "../render.js";
+import { head, hint, page } from "../render.js";
 
-/** 4c — the "watch it think" surface. */
+/** Live — the same event source as the terminal view. */
 export function streamScreen(): string {
   return page(
-    "stream",
-    "stream",
-    `<h1>Live stream</h1>
-     <p class="note">Same event source as the terminal view. Scrolling stops when you scroll up.</p>
+    "live",
+    "live",
+    `${head("As it happens", "The same event stream the terminal view reads. Scrolling up pauses it.")}
      <div id="stream"></div>
+     ${hint("Each line is written when the decision is made, not reconstructed afterwards.")}
      <script>
        const box = document.getElementById("stream");
        const pad = (s, n) => String(s).padEnd(n).slice(0, n);
@@ -19,12 +19,11 @@ export function streamScreen(): string {
        es.onmessage = (m) => {
          const l = JSON.parse(m.data);
          const el = document.createElement("div");
-         el.className = "s-" + l.kind;
-         el.textContent = pad(l.caseId, 12) + pad(l.kind, 10) + l.text;
+         el.innerHTML = pad(l.caseId, 12) + "<b>" + pad(l.kind, 10) + "</b>" + l.text;
          box.appendChild(el);
          while (box.childNodes.length > 800) box.removeChild(box.firstChild);
          if (pinned) box.scrollTop = box.scrollHeight;
        };
-     </script>`,
+     <\/script>`,
   );
 }

@@ -1,26 +1,30 @@
-import { bar, kpi, page, panel, pct, rupees, table } from "../render.js";
+import { bar, figure, head, hint, lede, measure, measures, page, pct, rupees, section, table } from "../render.js";
 import { latestBatch, policyBlocks, terminalStates, tierCounts } from "../queries.js";
 
-/** Screen 1 — the money screen. */
+/** Overview — the money screen. */
 export async function batchScreen(): Promise<string> {
   const b = await latestBatch();
   if (!b) {
-    return page("batch", "batch", panel("no run yet", `<p class="note">Run <code>npm run batch scenarios/demo.yaml</code>, then reload.</p>`));
+    return page(
+      "overview",
+      "overview",
+      head("No run yet", "Run <code>npm run batch scenarios/demo.yaml</code>, then reload."),
+    );
   }
 
   const gross = Number(b.gross_recovered_paise);
   const incr = Number(b.incremental_paise);
   const [lo, hi] = [Number(b.incremental_ci_low), Number(b.incremental_ci_high)];
 
-  const head = `<div class="kpis">
-    ${kpi(rupees(gross), "gross recovered", "money that arrived")}
-    ${kpi(rupees(incr), "est. incremental", `95% CI ${rupees(lo)} – ${rupees(hi)}`, true)}
-    ${kpi(pct(b.lift), "recovery lift", `95% CI ${pct(b.lift_ci_low)} – ${pct(b.lift_ci_high)}`)}
-    ${kpi(String(b.treated_n + b.holdout_n), "cases", `${b.window_days}-day window`)}
-  </div>`;
+  // Incremental leads. Gross is set quiet beside it because the two are
+  // routinely confused, and the whole point of the holdout is that they differ.
+  const top = lede([
+    figure(rupees(incr), "recovered by the agent", `95% interval ${rupees(lo)} – ${rupees(hi)}`),
+    figure(rupees(gross), "collected in total", "includes money that would have arrived anyway", true),
+  ]);
 
   const arms = table(
-    ["arm", "n", "recovered", "rate", ""],
+    ["arm", "cases", "recovered", "rate", ""],
     [
       ["treated", String(b.treated_n), String(b.treated_recovered), pct(b.treated_rate), bar(b.treated_rate)],
       ["holdout", String(b.holdout_n), String(b.holdout_recovered), pct(b.holdout_rate), bar(b.holdout_rate, true)],
@@ -29,16 +33,18 @@ export async function batchScreen(): Promise<string> {
   );
 
   const tiers = await tierCounts();
+  const tierTotal = tiers.reduce((s, x) => s + x.n, 0) || 1;
   const tierRows = tiers.map((t) => [
-    `<span class="tag t${t.tier}">TIER ${t.tier}</span>`,
+    `<span class="key">Tier ${t.tier}</span>`,
+    t.tier === 0 ? "decline taxonomy and playbook" : t.tier === 1 ? "specialists deliberated" : "escalated to a person",
     String(t.n),
-    bar(t.n / tiers.reduce((s, x) => s + x.n, 0)),
+    bar(t.n / tierTotal, t.tier !== 0),
   ]);
 
   const terminals = await terminalStates();
-  const totalCases = terminals.reduce((s, t) => s + t.n, 0);
+  const totalCases = terminals.reduce((s, t) => s + t.n, 0) || 1;
   const termRows = terminals.map((t) => [
-    `<span class="state-${t.state}">${t.state}</span>`,
+    `<span class="state state-${t.state}">${t.state.replace(/_/g, " ")}</span>`,
     String(t.n),
     rupees(Number(t.value)),
     bar(t.n / totalCases, t.state !== "RECOVERED"),
@@ -46,26 +52,30 @@ export async function batchScreen(): Promise<string> {
 
   const blocks = (await policyBlocks()).filter((p) => p.outcome === "block");
   const blockRows = blocks.map((p) => [
-    `<span class="tag blocked">${p.rule_id}</span>`,
+    `<span class="mono">${p.rule_id}</span>`,
+    p.reason,
     String(p.n),
-    `<span class="note">${p.reason}</span>`,
   ]);
 
   return page(
-    "batch",
-    "batch",
-    `<h1>Batch run · ${b.batch_id} · arm ${b.arm}</h1>
-     ${head}
-     <div class="panel" style="margin-top:16px">
-       <div class="hd">gross is not incremental</div>
-       <p class="note">Gross is every rupee that arrived. Incremental is the money the agent
-       <em>caused</em>, measured against a randomised holdout that was never acted on.
-       Excluded as natural recovery, symmetrically from both arms:
-       ${b.excluded_treated} treated, ${b.excluded_holdout} holdout.</p>
-     </div>
-     ${panel("arms", arms)}
-     ${panel("decision ladder", table(["tier", "cases", ""], tierRows, [1]))}
-     ${panel("terminal states", table(["state", "cases", "value at risk", ""], termRows, [1, 2]))}
-     ${blockRows.length ? panel("policy blocks", table(["rule", "blocked", "reason"], blockRows, [1])) : ""}`,
+    "overview",
+    "overview",
+    `${head(
+      "Recovery run",
+      `${b.treated_n + b.holdout_n} obligations at risk, worked over a ${b.window_days}-day window.`,
+    )}
+     ${top}
+     ${measures([
+       measure(pct(b.lift), "lift over holdout", `95% interval ${pct(b.lift_ci_low)} – ${pct(b.lift_ci_high)}`),
+       measure(String(b.holdout_n), "held back", "never contacted, so the comparison is real"),
+       measure(String(b.excluded_treated + b.excluded_holdout), "excluded as natural", "dropped from both arms alike"),
+     ])}
+     ${hint(
+       `The holdout is the argument. Without a set of cases the agent never touched, any recovery
+        number is just the money that happened to arrive.`,
+     )}
+     ${section("who decided", table(["", "how", "cases", ""], tierRows, [2]))}
+     ${section("how cases ended", table(["outcome", "cases", "value", ""], termRows, [1, 2]))}
+     ${blockRows.length ? section("actions the policy refused", table(["rule", "because", "count"], blockRows, [2])) : ""}`,
   );
 }
