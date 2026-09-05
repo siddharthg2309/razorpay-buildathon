@@ -67,7 +67,11 @@ if (keyId && keySecret && allOk) {
     allOk = check("live payment link created", res.ok, res.reference ?? JSON.stringify(res.detail).slice(0, 120)) && allOk;
     if (res.ok && res.reference) {
       console.log(`\n  payment link id: ${res.reference}`);
-      console.log("  open it in test mode, pay with a test card, and the webhook closes the case.");
+      // This link belongs to no case — preflight proves the credential path and
+      // nothing more. Paying it does nothing visible, which is confusing enough
+      // to be worth saying here rather than discovering on stage.
+      console.log("  this link is a throwaway credential check — it is attached to no case.");
+      console.log("  for a case you can watch end to end, run: npm run live-case");
     }
   } catch (err) {
     allOk = check("live payment link created", false, (err as Error).message) && allOk;
