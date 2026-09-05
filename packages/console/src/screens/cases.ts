@@ -53,10 +53,15 @@ export async function caseScreen(caseId: string): Promise<string> {
   const h = header as Record<string, unknown>;
   const state = String(h["state"]);
 
+  // One scale for the whole trail, chosen from how long the case actually ran.
+  const span = entries.length
+    ? entries[entries.length - 1]!.ts.getTime() - origin.getTime()
+    : Infinity;
+
   const trail = entries
     .map(
       (e) => `<tr${KEY_STEPS.has(e.kind) ? ' class="key"' : ""}>
-        <td class="t">${rel(e.ts, origin)}</td>
+        <td class="t">${rel(e.ts, origin, span)}</td>
         <td class="ev">${esc(e.kind.replace(/_/g, " "))}</td>
         <td class="d">${e.surface ? `${surfaceTag(e.surface)} ` : ""}${esc(e.detail)}</td>
       </tr>`,

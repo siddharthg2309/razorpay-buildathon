@@ -15,9 +15,26 @@ export const rupees = (paise: number | string | null): string => {
 
 export const pct = (x: number | null): string => `${((Number(x) || 0) * 100).toFixed(1)}%`;
 
-/** Virtual-clock offsets read better than wall timestamps on this content. */
-export const rel = (ts: Date, origin: Date): string => {
-  const ms = ts.getTime() - origin.getTime();
+/**
+ * Virtual-clock offsets read better than wall timestamps on this content — but
+ * the resolution has to follow the trail, not the other way round.
+ *
+ * A simulated case runs for days, so hours and minutes are right. A live case
+ * runs to completion inside one minute, and at HH:MM every row of it reads
+ * 00:00, which tells the reader the ordering is unknown rather than fast.
+ * `span` is the whole trail's duration, and it picks the unit once so every
+ * row is stamped on the same scale.
+ */
+export const rel = (ts: Date, origin: Date, span = Infinity): string => {
+  const ms = Math.max(0, ts.getTime() - origin.getTime());
+  // A live case is over in a second. Rounding that to a minute would print
+  // 00:00 nine times and lose the ordering the trail exists to show.
+  if (span < 60_000) return `${(ms / 1000).toFixed(3)}s`;
+  if (span < 3_600_000) {
+    const m = Math.floor(ms / 60_000);
+    const s = Math.floor((ms % 60_000) / 1000);
+    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
   const d = Math.floor(ms / 86_400_000);
   const h = Math.floor((ms % 86_400_000) / 3_600_000);
   const m = Math.floor((ms % 3_600_000) / 60_000);
