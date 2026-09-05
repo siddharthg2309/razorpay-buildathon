@@ -1,4 +1,4 @@
-import { bar, card, grid, hint, page, pageHead, pct, rupees, section, stat, table } from "../render.js";
+import { bar, card, grid, page, pageHead, pct, rupees, section, stat, table } from "../render.js";
 import { latestBatch, policyBlocks, terminalStates, tierCounts } from "../queries.js";
 import { getPool } from "@rra/db";
 
@@ -29,9 +29,9 @@ export async function batchScreen(): Promise<string> {
 
   const headline = grid(4, [
     stat("Recovered by the agent", rupees(incr), `95% interval ${rupees(lo)} – ${rupees(hi)}`, "hero"),
-    stat("Collected in total", rupees(gross), "includes money that would have arrived anyway", "quiet"),
+    stat("Collected in total", rupees(gross), "before the counterfactual is removed", "quiet"),
     stat("Lift over holdout", pct(b.lift), `interval ${pct(b.lift_ci_low)} – ${pct(b.lift_ci_high)}`),
-    stat("Obligations worked", String(total), `${b.holdout_n} held back, never contacted`),
+    stat("Obligations worked", String(total), `${b.holdout_n} held back`),
   ]);
 
   const arms = card(
@@ -44,7 +44,7 @@ export async function batchScreen(): Promise<string> {
       ],
       [1, 2, 3],
     ),
-    `${b.excluded_treated + b.excluded_holdout} excluded as natural recovery`,
+    `${b.excluded_treated + b.excluded_holdout} excluded`,
     true,
   );
 
@@ -57,10 +57,10 @@ export async function batchScreen(): Promise<string> {
       tiers.map((t) => [
         `<span class="chip">Tier ${t.tier}</span>`,
         t.tier === 0
-          ? "Decline taxonomy and playbook"
+          ? "Taxonomy and playbook"
           : t.tier === 1
-            ? "Specialists deliberated"
-            : "Escalated to a person",
+            ? "Specialists"
+            : "A person",
         String(t.n),
         bar(t.n / tierTotal, t.tier !== 0),
       ]),
@@ -112,9 +112,9 @@ export async function batchScreen(): Promise<string> {
   const incidents = Number(inc[0]?.n ?? 0);
 
   const activity = grid(3, [
-    stat("Incidents", String(incidents), incidents ? `${inc[0]?.parked} cases held while it ran` : "nothing crossed the threshold"),
-    stat("Provider calls", String(b.provider_calls), b.provider_calls ? "on the cases Tier 0 could not answer" : "no model was configured"),
-    stat("Measurement window", `${b.window_days} days`, "per obligation, from the moment it was opened"),
+    stat("Incidents", String(incidents), incidents ? `${inc[0]?.parked} cases held` : "none opened"),
+    stat("Provider calls", String(b.provider_calls), b.provider_calls ? "cases Tier 0 could not answer" : "no model configured"),
+    stat("Measurement window", `${b.window_days} days`, "per obligation"),
   ]);
 
   return page(
@@ -122,13 +122,9 @@ export async function batchScreen(): Promise<string> {
     "/",
     `${pageHead(
       "Recovery run",
-      `${total} obligations at risk, worked to a conclusion under a virtual clock.`,
+      `${total} obligations at risk, worked to a conclusion.`,
     )}
      ${headline}
-     ${hint(
-       `The held-back arm is the argument. Without a set of cases the agent never touched,
-        a recovery figure is only the money that happened to arrive.`,
-     )}
      ${section("", `<div class="grid c2">${arms}${decided}</div>`)}
      ${section("", `<div class="grid c2">${outcomes}${refused}</div>`)}
      ${section("Run at a glance", activity)}`,

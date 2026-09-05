@@ -1,5 +1,5 @@
 import { getPool } from "@rra/db";
-import { bar, card, esc, grid, hint, page, pageHead, pct, rupees, section, stat, table } from "../render.js";
+import { bar, card, esc, grid, page, pageHead, pct, rupees, section, stat, table } from "../render.js";
 
 interface Arm {
   arm: string; incremental_paise: string; lift: number;
@@ -39,8 +39,7 @@ export async function ablationScreen(): Promise<string> {
   if (decisions.length === 0 && !full) {
     return page("Model", "/ablation",
       `${pageHead("The model has not run", "No provider was configured for this batch.")}
-       <p class="note">Tier 0 resolved every case from the decline taxonomy. That is the design —
-       the model is for the residue — but it means there is nothing here to show. Set a key in
+       <p class="note">Tier 0 resolved every case from the decline taxonomy. Set a key in
        <code>.env</code> and run the batch again.</p>`);
   }
 
@@ -72,14 +71,10 @@ export async function ablationScreen(): Promise<string> {
       ])}
       ${section(readable ? "large enough to read" : "too small to read",
         readable
-          ? `<p class="note">The difference is bigger than the noise a batch this size carries, so
-             it is worth reading. It compares the model against a <em>generic playbook</em>, not
-             against hand-written rules over the same evidence — an engineer could encode some of
-             this judgement. What the model buys is not having to anticipate every code an issuer
-             might invent.</p>`
-          : `<p class="note">The arms differ on ${differing} cases, and a batch total cannot resolve
-             a difference that small. The honest reading is that the model did not measurably move
-             the number — and the claim worth making is the one below, case by case.</p>`)}`;
+          ? `<p class="note">Larger than the noise a batch this size carries. It compares the model
+             against a generic playbook, not against hand-written rules over the same evidence.</p>`
+          : `<p class="note">The arms differ on ${differing} cases — too few for a batch total to
+             resolve. The claim worth making is the one below, case by case.</p>`)}`;
   }
 
   const rows = decisions.slice(0, 40).map((d) => [
@@ -95,18 +90,14 @@ export async function ablationScreen(): Promise<string> {
   return page(
     "Model",
     "/ablation",
-    `${pageHead("What the model decided", "The cases the decline taxonomy could not answer. Everything else was resolved deterministically and is identical either way.")}
+    `${pageHead("What the model decided", "The cases the decline taxonomy could not answer.")}
      ${verdict}
      ${section("what it concluded",
        table(["cause", "cases", ""],
          [...spread.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) =>
            [esc(c.replace(/_/g, " ")), String(n), bar(n / Math.max(1, decisions.length))]),
          [1]) +
-       `<p class="note" style="margin-top:16px">${recovered} of ${decisions.length} of these went
-        on to recover.</p>`)}
-     ${section("case by case", table(["case", "at risk", "rail", "concluded", "confidence", "citing", "outcome"], rows, [1, 4]))}
-     ${hint(`Every row names the evidence the diagnosis cited, so the reasoning can be checked
-       rather than taken on trust. This screen is the whole of the model's contribution, at the
-       size it actually is.`)}`,
+       `<p class="note" style="margin-top:16px">${recovered} of ${decisions.length} recovered.</p>`)}
+     ${section("case by case", table(["case", "at risk", "rail", "concluded", "confidence", "citing", "outcome"], rows, [1, 4]))}`,
   );
 }

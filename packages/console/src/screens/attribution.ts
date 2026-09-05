@@ -1,5 +1,5 @@
 import { latestBatch } from "../queries.js";
-import { bar, card, grid, hint, page, pageHead, pct, rupees, section, stat, table } from "../render.js";
+import { bar, card, grid, page, pageHead, pct, rupees, section, stat, table } from "../render.js";
 
 /** Attribution — the estimator, written out with this run's numbers in it. */
 export async function attributionScreen(): Promise<string> {
@@ -23,11 +23,11 @@ export async function attributionScreen(): Promise<string> {
   return page(
     "Attribution",
     "/attribution",
-    `${pageHead("How the number is arrived at", "Nothing here stands in for money. The figure is what the agent caused, measured against cases it never touched.")}
+    `${pageHead("How the number is arrived at", "Measured against cases the agent never touched.")}
      ${grid(3, [
        stat("Recovered by the agent", rupees(incr), `interval ${rupees(Number(b.incremental_ci_low))} – ${rupees(Number(b.incremental_ci_high))}`, "hero"),
        stat("Collected in total", rupees(Number(b.gross_recovered_paise)), "before the counterfactual is removed", "quiet"),
-       stat("Held back", String(b.holdout_n), "stratified by cause and value, immutable once assigned"),
+       stat("Held back", String(b.holdout_n), "stratified, immutable once assigned"),
      ])}
      ${section("The estimator", card("", equation))}
      ${section("The two arms", card("", table(
@@ -39,15 +39,10 @@ export async function attributionScreen(): Promise<string> {
        [1, 2, 3],
      ), "", true))}
      ${section("", `<div class="grid c2">
-       ${card("What is excluded", `<p class="note">Money that arrived on its own is dropped from
-         <strong>both</strong> arms: ${b.excluded_treated} treated, ${b.excluded_holdout} held back.
-         Excluding it from the treated arm alone would look rigorous and quietly inflate the
-         result, because the held-back arm has no contact to measure against.</p>`)}
-       ${card("What the interval is for", `<p class="note">The interval is set by the held-back arm,
-         which is the smaller one. What remains is chance imbalance between the two groups on
-         things nobody can observe — who was going to pay regardless. No amount of reweighting
-         fixes that, which is why this is reported as a range.</p>`)}
-     </div>`)}
-     ${hint("Claim the interval, not the point.")}`,
+       ${card("What is excluded", `<p class="note">Money that arrived on its own, dropped from
+         <strong>both</strong> arms: ${b.excluded_treated} treated, ${b.excluded_holdout} held back.</p>`)}
+       ${card("What the interval is for", `<p class="note">Chance imbalance between the arms on what
+         nobody can observe — who was going to pay regardless. Claim the interval, not the point.</p>`)}
+     </div>`)}`,
   );
 }

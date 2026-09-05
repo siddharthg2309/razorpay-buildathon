@@ -1,13 +1,12 @@
-import { card, hint, page, pageHead } from "../render.js";
+import { card, page, pageHead } from "../render.js";
 
 /** Live — the same event source the terminal view reads. */
 export function streamScreen(): string {
   return page(
     "Live activity",
     "/stream",
-    `${pageHead("Live activity", "The same event stream as the terminal view. Scroll up to pause it.")}
+    `${pageHead("Live activity", "Scroll up to pause.")}
      ${card("Events", `<div id="stream"></div>`, "newest at the bottom", true)}
-     ${hint("Each line is written at the moment the decision is made, not reconstructed afterwards.")}
      <script>
        const box = document.getElementById("stream");
        const pad = (s, n) => String(s).padEnd(n).slice(0, n);

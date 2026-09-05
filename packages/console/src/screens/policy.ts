@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { loadPolicy } from "@rra/core";
 import { policyBlocks } from "../queries.js";
-import { card, esc, grid, hint, page, pageHead, section, stat, table } from "../render.js";
+import { card, esc, grid, page, pageHead, section, stat, table } from "../render.js";
 
 /** Policy — the rules, each with a count behind it. */
 export async function policyScreen(merchant = "acme-subscriptions"): Promise<string> {
@@ -32,7 +32,7 @@ export async function policyScreen(merchant = "acme-subscriptions"): Promise<str
   return page(
     "Policy",
     "/policy",
-    `${pageHead("What the agent is allowed to do", `Version ${esc(policy.version)}, for ${esc(policy.merchant)}. Every action cites the rule that permitted it.`)}
+    `${pageHead("What the agent is allowed to do", `Version ${esc(policy.version)} · ${esc(policy.merchant)}`)}
      ${grid(4, [
        stat("Actions refused", String(sum("block")), "each by a named rule", "hero"),
        stat("Actions permitted", String(sum("allow")), "", "quiet"),
@@ -41,9 +41,7 @@ export async function policyScreen(merchant = "acme-subscriptions"): Promise<str
      ])}
      ${section("Every decision, and the rule behind it",
        card("", table(["rule", "outcome", "reason", "count"], rows, [3]), "", true))}
-     ${section("How often one customer can be contacted", card("", caps, "", true))}
-     ${hint(`The limit across all channels is what stops three separate per-channel allowances
-       becoming one customer contacted ten times in a week.`)}
-     ${section("The policy in force, verbatim", card("", `<pre>${esc(raw)}</pre>`))}`,
+     ${section("Contact caps", card("", caps, "", true))}
+     ${section("The policy in force", card("", `<pre>${esc(raw)}</pre>`))}`,
   );
 }

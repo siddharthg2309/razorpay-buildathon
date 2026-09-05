@@ -1,5 +1,5 @@
 import { caseList, caseTrail } from "../queries.js";
-import { card, esc, grid, hint, page, pageHead, rel, rupees, section, stat, surfaceTag, table } from "../render.js";
+import { card, esc, grid, page, pageHead, rel, rupees, section, stat, surfaceTag, table } from "../render.js";
 
 const FILTERS = ["", "RECOVERED", "UNRECOVERABLE", "OPTED_OUT", "DISPUTED", "SUPPRESSED_BY_INCIDENT"] as const;
 
@@ -28,7 +28,7 @@ export async function casesScreen(filter?: string): Promise<string> {
   return page(
     "Cases",
     "/cases",
-    `${pageHead("Cases", "Every obligation the agent opened. Open one to read exactly what it did, and why.")}
+    `${pageHead("Cases", "Open one to read what it did, and why.")}
      ${filters}
      ${card("", body, `${rows.length} shown`, true)}`,
   );
@@ -75,18 +75,14 @@ export async function caseScreen(caseId: string): Promise<string> {
        stat("Outcome", state.replace(/_/g, " ").toLowerCase(),
          h["terminal_reason"] ? esc(h["terminal_reason"]) : "",
          state === "RECOVERED" ? "hero" : "quiet"),
-       stat("Decided by", `Tier ${h["tier"]}`, h["tier"] === 0 ? "taxonomy, no model" : "specialists"),
+       stat("Decided by", `Tier ${h["tier"]}`, h["tier"] === 0 ? "taxonomy" : "specialists"),
        stat("Arm", h["holdout_flag"] ? "held back" : "treated",
-         h["holdout_flag"] ? "never contacted" : "agent acted",
+         "",
          h["holdout_flag"] ? "quiet" : "normal"),
      ])}
      ${section("", card("What happened, in order",
        `<div class="scroll"><table class="trail"><tbody>${trail}</tbody></table></div>`,
        `${entries.length} entries`, true))}
-     ${hint(
-       `<span class="chip solid">LIVE</span> marks an action executed against Razorpay Test Mode;
-        <span class="chip">SIM</span> marks one executed against the simulator. Nothing here is
-        reconstructed after the fact — each line was written as it happened.`,
-     )}`,
+`,
   );
 }

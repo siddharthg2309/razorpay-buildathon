@@ -1,5 +1,5 @@
 import { incidentList, releaseSteps } from "../queries.js";
-import { bar, card, esc, grid, hint, page, pageHead, pct, section, stat, table } from "../render.js";
+import { bar, card, esc, grid, page, pageHead, pct, section, stat, table } from "../render.js";
 
 const RAMP = [0.05, 0.15, 0.4, 1.0];
 
@@ -11,10 +11,9 @@ export async function incidentsScreen(): Promise<string> {
       "Incidents",
       "/incidents",
       `${pageHead("No incident opened", "Nothing in this run crossed the detection threshold.")}
-       ${card("Why that is a result", `<p class="note">A fault confined to a few dozen cases is
-         genuinely indistinguishable from noise. The detector is built to stay quiet rather than
-         open something it cannot justify — a volume floor, a dwell requirement and a correction
-         for testing hundreds of segments at once all have to be cleared first.</p>`)}`,
+       ${card("Why that is a result", `<p class="note">A volume floor, a dwell requirement and a
+         correction for testing many segments at once all have to be cleared first. Staying quiet
+         is the detector working.</p>`)}`,
     );
   }
 
@@ -36,8 +35,8 @@ export async function incidentsScreen(): Promise<string> {
             ]],
             [0, 1, 2, 3, 4],
           )
-        : `<p class="note">Opened from an external downtime signal rather than the internal
-           detector, so there is no test statistic. Both paths converge on one record.</p>`;
+        : `<p class="note">Opened from an external downtime signal, so there is no test
+           statistic.</p>`;
 
     const stepRows = steps.map((s) => {
       const p = s.payload as Record<string, unknown>;
@@ -58,7 +57,7 @@ export async function incidentsScreen(): Promise<string> {
     blocks.push(`
       ${pageHead(esc(i.segment_label), `${esc(i.detected_by.replace(/_/g, " "))} · ${esc(i.state)}`)}
       ${grid(3, [
-        stat("Cases held", String(parked), "not retrying on their own", "hero"),
+        stat("Cases held", String(parked), "", "hero"),
         stat("Release stage", `${i.release_stage} of ${RAMP.length}`, RAMP.map((f) => `${(f * 100).toFixed(0)}%`).join(" · ")),
         stat("Approval rate", pct(i.observed_rate), `against ${pct(i.baseline_rate)} expected`),
       ])}
@@ -66,15 +65,13 @@ export async function incidentsScreen(): Promise<string> {
         ${card("What the detector saw", detection, "", true)}
         ${card("Letting them back out",
           `${bar(i.release_stage / RAMP.length)}
-           <p class="note" style="margin-top:12px">Released in widening slices, each gated on the
-           live rate holding. If it drops, the slice is pulled back rather than pressing on.</p>`)}
+           <p class="note" style="margin-top:12px">Widening slices, each gated on the live rate
+           holding. If it drops, the slice is pulled back.</p>`)}
       </div>`)}
       ${stepRows.length ? section("", card("Release steps",
         table(["step", "stage", "released", "still held", "reason"], stepRows, [1, 2, 3]), "", true)) : ""}
       ${i.rca ? section("", card("What caused it", `<pre>${esc(JSON.stringify(i.rca, null, 2))}</pre>`)) : ""}
-      ${hint(`The incident owns these cases, not the other way round. A held case cannot resume
-        itself, which is what stops a thousand of them returning at once to a gateway that has
-        only just recovered.`)}`);
+`);
   }
 
   return page("Incidents", "/incidents", blocks.join(""));

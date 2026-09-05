@@ -5,6 +5,8 @@
  *
  *   1. Warm neutrals, not greys. The canvas is off-white #f5f5f5 over warm
  *      near-black ink #0c0a09. Hue is never information — it is temperature.
+ *      Light only: the system is built on an off-white paper canvas, and an
+ *      inverted version of it would be a different design, not a variant.
  *   2. An editorial display face at a light weight. Display copy never bolds;
  *      that single rule is what separates the voice from consumer marketing.
  *      Waldenburg is licensed, so this uses the documented substitute path and
@@ -50,21 +52,6 @@ export const CSS = `
   --sans:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
   --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;
 }
-@media (prefers-color-scheme:dark){
-  :root:not([data-theme="light"]){
-    --canvas:#0c0a09; --canvas-soft:#131110; --card:#1c1917; --surface-strong:#231f1d;
-    --line:#2b2724; --line-soft:#231f1d; --line-strong:#3b3531;
-    --ink:#faf9f8; --body:#c4bfba; --muted:#a8a29e; --muted-soft:#78716c; --on-ink:#0c0a09;
-    --drop:none; --orb-opacity:.16;
-  }
-}
-:root[data-theme="dark"]{
-  --canvas:#0c0a09; --canvas-soft:#131110; --card:#1c1917; --surface-strong:#231f1d;
-  --line:#2b2724; --line-soft:#231f1d; --line-strong:#3b3531;
-  --ink:#faf9f8; --body:#c4bfba; --muted:#a8a29e; --muted-soft:#78716c; --on-ink:#0c0a09;
-  --drop:none; --orb-opacity:.16;
-}
-
 /* per-screen atmosphere: one orb, chosen by route, purely decorative */
 [data-orb="peach"]{--orb:var(--orb-peach)}
 [data-orb="lavender"]{--orb:var(--orb-lavender)}
@@ -72,7 +59,7 @@ export const CSS = `
 [data-orb="rose"]{--orb:var(--orb-rose)}
 
 *{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%}
+html{-webkit-text-size-adjust:100%;color-scheme:light}
 body{
   margin:0;background:var(--canvas);color:var(--body);
   font-family:var(--sans);font-size:15px;line-height:1.5;letter-spacing:.16px;
@@ -140,7 +127,6 @@ h2{font-family:var(--serif);font-weight:300;font-size:24px;line-height:1.2;
 section{margin-bottom:40px}
 p{margin:0 0 14px;max-width:70ch}
 .note{color:var(--body);font-size:15px;max-width:70ch;margin:0}
-.hint{color:var(--muted);font-size:15px;max-width:72ch;margin:16px 0 0;line-height:1.5}
 
 /* ── cards — hairline + one soft drop tier ────────────────────────────── */
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r-xl);

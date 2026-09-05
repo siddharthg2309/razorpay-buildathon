@@ -1,5 +1,5 @@
 import { getPool } from "@rra/db";
-import { bar, card, esc, grid, hint, page, pageHead, pct, rupees, section, stat, table } from "../render.js";
+import { bar, card, esc, grid, page, pageHead, pct, rupees, section, stat, table } from "../render.js";
 
 interface Breakdown {
   key: string; n: number; recovered: number; rate: number;
@@ -83,23 +83,21 @@ export async function metricsScreen(): Promise<string> {
   return page(
     "Breakdown",
     "/metrics",
-    `${pageHead("Beyond the headline", "Where the recovery came from, how long it took, and what it cost in customer patience.")}
+    `${pageHead("Beyond the headline", "Where the recovery came from, and what it cost in contacts.")}
      ${grid(4, [
        stat("typical time to recover", hours(ttr[0]?.p50 ?? null), `slowest tenth ${hours(ttr[0]?.p90 ?? null)}`),
-       stat("renewals collected", rupees(Number(mrr[0]?.collected ?? 0)), `${mrr[0]?.n ?? 0} subscriptions kept`),
-       stat("customers contacted", String(contacts), `${contact[0]?.customers ?? 0} people reached`),
+       stat("renewals collected", rupees(Number(mrr[0]?.collected ?? 0)), `${mrr[0]?.n ?? 0} kept · not in the headline`),
+       stat("customers contacted", String(contacts), `${contact[0]?.customers ?? 0} people`),
        stat("collected per contact", contacts ? rupees(recoveredPaise / contacts) : "—"),
      ])}
      ${section("by cause", render(await breakdown("cause")))}
      ${section("by rail", render(await breakdown("rail")))}
      ${section("by gateway", render(await breakdown("gateway")))}
      ${section("by issuer", render(await breakdown("issuer")))}
-     ${section("how overdue the invoices were when they paid",
+     ${section("invoice age at recovery",
        aging.length
          ? table(["age at recovery", "invoices", "value"],
              aging.map((a) => [esc(a.bucket), a.n, rupees(Number(a.value))]), [1, 2])
-         : `<p class="empty">No overdue invoices recovered in this run.</p>`)}
-     ${hint(`Renewals collected is shown here and never added to the headline. A recovered renewal
-       is cash collected once — counting it again as retained revenue would be double-counting.`)}`,
+         : `<p class="empty">No overdue invoices recovered in this run.</p>`)}`,
   );
 }

@@ -59,7 +59,7 @@ const ORBS: Record<string, string> = {
 };
 
 export interface Chrome {
-  /** Shown under the wordmark: which run is on screen. */
+  /** Shown under the nav: which run is on screen. */
   footer?: string;
 }
 
@@ -76,7 +76,7 @@ export function page(title: string, active: string, body: string, chrome: Chrome
 <title>${esc(title)} — Recovery Agent</title><style>${CSS}</style></head>
 <body><div class="shell">
 <aside>
-  <div class="brand"><b>Recovery Agent</b><span>revenue at risk, recovered and measured</span></div>
+  <div class="brand"><b>Recovery Agent</b></div>
   ${nav}
   ${chrome.footer ? `<div class="sidefoot">${chrome.footer}</div>` : ""}
 </aside>
@@ -84,9 +84,10 @@ export function page(title: string, active: string, body: string, chrome: Chrome
 </div></body></html>`;
 }
 
-/** The orb sits inside the head, behind the display line, containing nothing. */
-export const pageHead = (title: string, dek: string): string =>
-  `<div class="pagehead"><div class="orb"></div><h1>${esc(title)}</h1><p>${dek}</p></div>`;
+/** The orb sits inside the head, behind the display line, containing nothing.
+ *  The dek is optional: a heading that already says it does not want a gloss. */
+export const pageHead = (title: string, dek = ""): string =>
+  `<div class="pagehead"><div class="orb"></div><h1>${esc(title)}</h1>${dek ? `<p>${dek}</p>` : ""}</div>`;
 
 export const section = (label: string, inner: string): string =>
   `<section>${label ? `<h2>${esc(label)}</h2>` : ""}${inner}</section>`;
@@ -138,5 +139,4 @@ export function table(
   return `<div class="scroll"><table><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table></div>`;
 }
 
-export const hint = (text: string): string => `<p class="hint">${text}</p>`;
 export const empty = (what: string): string => `<p class="empty">${what}</p>`;
