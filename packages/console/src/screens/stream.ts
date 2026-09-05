@@ -5,7 +5,7 @@ export function streamScreen(): string {
   return page(
     "Live activity",
     "/stream",
-    `${pageHead("Live activity", "Scroll up to pause.")}
+    `${pageHead("Live activity")}
      ${card("Events", `<div id="stream"></div>`, "newest at the bottom", true)}
      <script>
        const box = document.getElementById("stream");

@@ -85,16 +85,16 @@ export async function metricsScreen(): Promise<string> {
     "/metrics",
     `${pageHead("Beyond the headline", "Where the recovery came from, and what it cost in contacts.")}
      ${grid(4, [
-       stat("typical time to recover", hours(ttr[0]?.p50 ?? null), `slowest tenth ${hours(ttr[0]?.p90 ?? null)}`),
-       stat("renewals collected", rupees(Number(mrr[0]?.collected ?? 0)), `${mrr[0]?.n ?? 0} kept · not in the headline`),
-       stat("customers contacted", String(contacts), `${contact[0]?.customers ?? 0} people`),
-       stat("collected per contact", contacts ? rupees(recoveredPaise / contacts) : "—"),
+       stat("Typical time to recover", hours(ttr[0]?.p50 ?? null), `slowest tenth ${hours(ttr[0]?.p90 ?? null)}`),
+       stat("Renewals collected", rupees(Number(mrr[0]?.collected ?? 0)), `${mrr[0]?.n ?? 0} kept · not in the headline`),
+       stat("Customers contacted", String(contacts), `${contact[0]?.customers ?? 0} distinct customers`),
+       stat("Collected per contact", contacts ? rupees(recoveredPaise / contacts) : "—"),
      ])}
-     ${section("by cause", render(await breakdown("cause")))}
-     ${section("by rail", render(await breakdown("rail")))}
-     ${section("by gateway", render(await breakdown("gateway")))}
-     ${section("by issuer", render(await breakdown("issuer")))}
-     ${section("invoice age at recovery",
+     ${section("By cause", render(await breakdown("cause")))}
+     ${section("By rail", render(await breakdown("rail")))}
+     ${section("By gateway", render(await breakdown("gateway")))}
+     ${section("By issuer", render(await breakdown("issuer")))}
+     ${section("Invoice age at recovery",
        aging.length
          ? table(["age at recovery", "invoices", "value"],
              aging.map((a) => [esc(a.bucket), a.n, rupees(Number(a.value))]), [1, 2])

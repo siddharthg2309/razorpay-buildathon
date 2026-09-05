@@ -18,7 +18,7 @@ export async function incidentsScreen(): Promise<string> {
   }
 
   const blocks: string[] = [];
-  for (const i of incidents) {
+  for (const [n, i] of incidents.entries()) {
     const steps = await releaseSteps(i.id);
     const parked = Number(i.parked);
 
@@ -55,13 +55,15 @@ export async function incidentsScreen(): Promise<string> {
     });
 
     blocks.push(`
-      ${pageHead(esc(i.segment_label), `${esc(i.detected_by.replace(/_/g, " "))} · ${esc(i.state)}`)}
+      ${n === 0
+        ? pageHead(esc(i.segment_label), `${esc(i.detected_by.replace(/_/g, " "))} · ${esc(i.state)}`)
+        : `<h2>${esc(i.segment_label)}</h2>`}
       ${grid(3, [
         stat("Cases held", String(parked), "", "hero"),
         stat("Release stage", `${i.release_stage} of ${RAMP.length}`, RAMP.map((f) => `${(f * 100).toFixed(0)}%`).join(" · ")),
         stat("Approval rate", pct(i.observed_rate), `against ${pct(i.baseline_rate)} expected`),
       ])}
-      ${section("", `<div class="grid c2">
+      ${section("Detection and release", `<div class="grid c2">
         ${card("What the detector saw", detection, "", true)}
         ${card("Letting them back out",
           `${bar(i.release_stage / RAMP.length)}
@@ -70,7 +72,7 @@ export async function incidentsScreen(): Promise<string> {
       </div>`)}
       ${stepRows.length ? section("", card("Release steps",
         table(["step", "stage", "released", "still held", "reason"], stepRows, [1, 2, 3]), "", true)) : ""}
-      ${i.rca ? section("", card("What caused it", `<pre>${esc(JSON.stringify(i.rca, null, 2))}</pre>`)) : ""}
+      ${i.rca ? section("", card("Root cause", `<pre>${esc(JSON.stringify(i.rca, null, 2))}</pre>`)) : ""}
 `);
   }
 

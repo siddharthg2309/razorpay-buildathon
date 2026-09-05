@@ -140,7 +140,9 @@ describe("console screens", () => {
     // compile error. It needs a test that actually executes the queries.
     const html = await metricsScreen();
     for (const heading of ["by cause", "by rail", "by gateway", "by issuer"]) {
-      expect(html).toContain(heading);
+      // Case-insensitive: the breakdown has to be present, its heading is free
+      // to be worded and capitalised however the page reads best.
+      expect(html.toLowerCase()).toContain(heading);
     }
     expect(html).toMatch(/time to recover/i);
   });

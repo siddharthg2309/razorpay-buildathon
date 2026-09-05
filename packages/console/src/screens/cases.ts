@@ -28,7 +28,7 @@ export async function casesScreen(filter?: string): Promise<string> {
   return page(
     "Cases",
     "/cases",
-    `${pageHead("Cases", "Open one to read what it did, and why.")}
+    `${pageHead("Cases")}
      ${filters}
      ${card("", body, `${rows.length} shown`, true)}`,
   );

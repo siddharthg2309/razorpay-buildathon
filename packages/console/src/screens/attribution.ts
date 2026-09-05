@@ -38,11 +38,13 @@ export async function attributionScreen(): Promise<string> {
        ],
        [1, 2, 3],
      ), "", true))}
-     ${section("", `<div class="grid c2">
-       ${card("What is excluded", `<p class="note">Money that arrived on its own, dropped from
-         <strong>both</strong> arms: ${b.excluded_treated} treated, ${b.excluded_holdout} held back.</p>`)}
-       ${card("What the interval is for", `<p class="note">Chance imbalance between the arms on what
-         nobody can observe — who was going to pay regardless. Claim the interval, not the point.</p>`)}
+     ${section("Reading the figure", `<div class="grid c2">
+       ${b.excluded_treated + b.excluded_holdout
+         ? card("Natural recovery", `<p class="note">Money that arrived on its own, dropped from
+           <strong>both</strong> arms: ${b.excluded_treated} treated, ${b.excluded_holdout} held back.</p>`)
+         : ""}
+       ${card("Why it is a range", `<p class="note">Chance imbalance between the arms on what nobody
+         can observe — who was going to pay regardless. Claim the interval, not the point.</p>`)}
      </div>`)}`,
   );
 }

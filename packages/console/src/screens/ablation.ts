@@ -62,14 +62,14 @@ export async function ablationScreen(): Promise<string> {
 
     verdict = `
       ${grid(2, [
-        stat("difference it made", rupees(delta), `over ${differing} cases`),
-        stat("what the batch can resolve", `± ${rupees(band)}`, readable ? "the difference is larger" : "the difference is smaller", "quiet"),
+        stat("Difference it made", rupees(delta), `over ${differing} cases`),
+        stat("What the batch can resolve", `± ${rupees(band)}`, readable ? "the difference is larger" : "the difference is smaller", "quiet"),
       ])}
       ${grid(4, [
-        stat("with the model", rupees(Number(full.incremental_paise)), `lift ${pct(full.lift)} · ${full.provider_calls} calls`),
-        stat("without it", rupees(Number(control.incremental_paise)), `lift ${pct(control.lift)} · playbooks only`, "quiet"),
+        stat("With the model", rupees(Number(full.incremental_paise)), `lift ${pct(full.lift)} · ${full.provider_calls} calls`),
+        stat("Without it", rupees(Number(control.incremental_paise)), `lift ${pct(control.lift)} · playbooks only`, "quiet"),
       ])}
-      ${section(readable ? "large enough to read" : "too small to read",
+      ${section(readable ? "Large enough to read" : "Too small to read",
         readable
           ? `<p class="note">Larger than the noise a batch this size carries. It compares the model
              against a generic playbook, not against hand-written rules over the same evidence.</p>`
@@ -92,12 +92,12 @@ export async function ablationScreen(): Promise<string> {
     "/ablation",
     `${pageHead("What the model decided", "The cases the decline taxonomy could not answer.")}
      ${verdict}
-     ${section("what it concluded",
+     ${section("What it concluded",
        table(["cause", "cases", ""],
          [...spread.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) =>
            [esc(c.replace(/_/g, " ")), String(n), bar(n / Math.max(1, decisions.length))]),
          [1]) +
        `<p class="note" style="margin-top:16px">${recovered} of ${decisions.length} recovered.</p>`)}
-     ${section("case by case", table(["case", "at risk", "rail", "concluded", "confidence", "citing", "outcome"], rows, [1, 4]))}`,
+     ${section("Case by case", table(["case", "at risk", "rail", "concluded", "confidence", "citing", "outcome"], rows, [1, 4]))}`,
   );
 }

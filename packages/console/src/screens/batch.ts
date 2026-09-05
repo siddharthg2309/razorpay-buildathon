@@ -44,7 +44,7 @@ export async function batchScreen(): Promise<string> {
       ],
       [1, 2, 3],
     ),
-    `${b.excluded_treated + b.excluded_holdout} excluded`,
+    b.excluded_treated + b.excluded_holdout ? `${b.excluded_treated + b.excluded_holdout} excluded` : "",
     true,
   );
 
@@ -125,8 +125,8 @@ export async function batchScreen(): Promise<string> {
       `${total} obligations at risk, worked to a conclusion.`,
     )}
      ${headline}
-     ${section("", `<div class="grid c2">${arms}${decided}</div>`)}
-     ${section("", `<div class="grid c2">${outcomes}${refused}</div>`)}
+     ${section("The measurement", `<div class="grid c2">${arms}${decided}</div>`)}
+     ${section("Outcomes", `<div class="grid c2">${outcomes}${refused}</div>`)}
      ${section("Run at a glance", activity)}`,
     { footer: `Batch <span class="mono">${b.batch_id}</span><br>arm ${b.arm}` },
   );
