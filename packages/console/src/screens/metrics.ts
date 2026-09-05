@@ -1,5 +1,5 @@
 import { getPool } from "@rra/db";
-import { bar, esc, head, hint, measure, measures, page, pct, rupees, section, table } from "../render.js";
+import { bar, card, esc, grid, hint, page, pageHead, pct, rupees, section, stat, table } from "../render.js";
 
 interface Breakdown {
   key: string; n: number; recovered: number; rate: number;
@@ -81,14 +81,14 @@ export async function metricsScreen(): Promise<string> {
   const recoveredPaise = Number(cost[0]?.recovered ?? 0);
 
   return page(
-    "metrics",
-    "metrics",
-    `${head("Beyond the headline", "Where the recovery came from, how long it took, and what it cost in customer patience.")}
-     ${measures([
-       measure(hours(ttr[0]?.p50 ?? null), "typical time to recover", `slowest tenth ${hours(ttr[0]?.p90 ?? null)}`),
-       measure(rupees(Number(mrr[0]?.collected ?? 0)), "renewals collected", `${mrr[0]?.n ?? 0} subscriptions kept`),
-       measure(String(contacts), "customers contacted", `${contact[0]?.customers ?? 0} people reached`),
-       measure(contacts ? rupees(recoveredPaise / contacts) : "—", "collected per contact"),
+    "Breakdown",
+    "/metrics",
+    `${pageHead("Beyond the headline", "Where the recovery came from, how long it took, and what it cost in customer patience.")}
+     ${grid(4, [
+       stat("typical time to recover", hours(ttr[0]?.p50 ?? null), `slowest tenth ${hours(ttr[0]?.p90 ?? null)}`),
+       stat("renewals collected", rupees(Number(mrr[0]?.collected ?? 0)), `${mrr[0]?.n ?? 0} subscriptions kept`),
+       stat("customers contacted", String(contacts), `${contact[0]?.customers ?? 0} people reached`),
+       stat("collected per contact", contacts ? rupees(recoveredPaise / contacts) : "—"),
      ])}
      ${section("by cause", render(await breakdown("cause")))}
      ${section("by rail", render(await breakdown("rail")))}

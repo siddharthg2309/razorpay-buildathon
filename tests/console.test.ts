@@ -43,6 +43,16 @@ beforeAll(async () => {
 
 afterAll(async () => { await closePool(); });
 
+/** Rendered text, with markup removed. Assertions on what a reader sees survive
+ *  a restyle; assertions on class names do not, as two reworks have now shown. */
+const strip = (html: string): string =>
+  html
+    .replace(/<style[\s\S]*?<\/style>/g, " ")
+    .replace(/<script[\s\S]*?<\/script>/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ");
+
 describe("console screens", () => {
   /**
    * These assert structure and meaning, not wording.
@@ -53,20 +63,24 @@ describe("console screens", () => {
    */
 
   it("keeps recovered-by-the-agent and total-collected as separate figures", async () => {
-    const html = await batchScreen();
-    // Two distinct rupee figures with their own captions, so neither can be
-    // read as the other. Which words caption them is a copy decision.
-    const captions = html.match(/class="caption">([^<]+)</g) ?? [];
-    expect(captions.length).toBeGreaterThanOrEqual(2);
-    const amounts = html.match(/class="amount[^"]*">([^<]+)</g) ?? [];
-    expect(new Set(amounts).size).toBeGreaterThanOrEqual(2);
+    // Asserted on rendered text, not on class names. The previous version
+    // matched markup and broke on a restyle that changed nothing a reader
+    // sees — twice.
+    const text = strip(await batchScreen());
+    expect(text).toMatch(/recovered by the agent/i);
+    expect(text).toMatch(/collected in total/i);
+    // Two different rupee figures, so neither can be mistaken for the other.
+    const amounts = new Set(text.match(/₹[\d.,]+\s*(?:L|Cr)?/g) ?? []);
+    expect(amounts.size).toBeGreaterThanOrEqual(2);
   });
 
   it("lists cases, marks the held-back arm, and links into each one", async () => {
     const html = await casesScreen();
     expect(html).toContain(`href="/case/${recoveredCase}"`);
-    // Holdout cases must be visually distinguishable from treated ones.
-    expect(html).toMatch(/class="mark"/);
+    // Held-back cases have to be tellable from treated ones by reading.
+    const text = strip(html);
+    expect(text).toMatch(/held back/i);
+    expect(text).toMatch(/treated/i);
   });
 
   it("shows a complete decision trail a judge can read unaided", async () => {
@@ -84,9 +98,9 @@ describe("console screens", () => {
   });
 
   it("labels every executed row SIM or LIVE", async () => {
-    const html = await caseScreen(recoveredCase);
-    const executes = (html.match(/class="ev">EXECUTE</g) ?? []).length;
-    const badges = (html.match(/class="mark(?: live)?">(?:SIM|LIVE)</g) ?? []).length;
+    const text = strip(await caseScreen(recoveredCase));
+    const executes = (text.match(/\bEXECUTE\b/g) ?? []).length;
+    const badges = (text.match(/\b(?:SIM|LIVE)\b/g) ?? []).length;
     expect(executes).toBeGreaterThan(0);
     // This screen exists to prove the honesty claim; an unlabelled executed row
     // would show a simulated action as though it were real.

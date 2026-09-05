@@ -1,5 +1,5 @@
 import { getPool } from "@rra/db";
-import { bar, esc, figure, head, hint, lede, measure, measures, page, pct, rupees, section, table } from "../render.js";
+import { bar, card, esc, grid, hint, page, pageHead, pct, rupees, section, stat, table } from "../render.js";
 
 interface Arm {
   arm: string; incremental_paise: string; lift: number;
@@ -37,8 +37,8 @@ export async function ablationScreen(): Promise<string> {
   );
 
   if (decisions.length === 0 && !full) {
-    return page("model", "ablation",
-      `${head("The model has not run", "No provider was configured for this batch.")}
+    return page("Model", "/ablation",
+      `${pageHead("The model has not run", "No provider was configured for this batch.")}
        <p class="note">Tier 0 resolved every case from the decline taxonomy. That is the design —
        the model is for the residue — but it means there is nothing here to show. Set a key in
        <code>.env</code> and run the batch again.</p>`);
@@ -62,13 +62,13 @@ export async function ablationScreen(): Promise<string> {
     const readable = Math.abs(delta) > band;
 
     verdict = `
-      ${lede([
-        figure(rupees(delta), "difference it made", `over ${differing} cases`),
-        figure(`± ${rupees(band)}`, "what the batch can resolve", readable ? "the difference is larger" : "the difference is smaller", true),
+      ${grid(2, [
+        stat("difference it made", rupees(delta), `over ${differing} cases`),
+        stat("what the batch can resolve", `± ${rupees(band)}`, readable ? "the difference is larger" : "the difference is smaller", "quiet"),
       ])}
-      ${measures([
-        measure(rupees(Number(full.incremental_paise)), "with the model", `lift ${pct(full.lift)} · ${full.provider_calls} calls`),
-        measure(rupees(Number(control.incremental_paise)), "without it", `lift ${pct(control.lift)} · playbooks only`, true),
+      ${grid(4, [
+        stat("with the model", rupees(Number(full.incremental_paise)), `lift ${pct(full.lift)} · ${full.provider_calls} calls`),
+        stat("without it", rupees(Number(control.incremental_paise)), `lift ${pct(control.lift)} · playbooks only`, "quiet"),
       ])}
       ${section(readable ? "large enough to read" : "too small to read",
         readable
@@ -93,9 +93,9 @@ export async function ablationScreen(): Promise<string> {
   ]);
 
   return page(
-    "model",
-    "ablation",
-    `${head("What the model decided", "The cases the decline taxonomy could not answer. Everything else was resolved deterministically and is identical either way.")}
+    "Model",
+    "/ablation",
+    `${pageHead("What the model decided", "The cases the decline taxonomy could not answer. Everything else was resolved deterministically and is identical either way.")}
      ${verdict}
      ${section("what it concluded",
        table(["cause", "cases", ""],

@@ -26,68 +26,77 @@ export const rel = (ts: Date, origin: Date): string => {
     : `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 };
 
-const NAV = [
-  ["/", "overview"],
-  ["/cases", "cases"],
-  ["/incidents", "incidents"],
-  ["/attribution", "attribution"],
-  ["/ablation", "model"],
-  ["/metrics", "metrics"],
-  ["/policy", "policy"],
-  ["/stream", "live"],
-] as const;
+/**
+ * Navigation, grouped by the question each screen answers.
+ *
+ * A flat list of eight items makes the reader hunt. Grouped, the shape of the
+ * product is legible from the sidebar alone: what happened, what it recovered,
+ * what it was allowed to do.
+ */
+const NAV: [string, [string, string][]][] = [
+  ["Run", [["/", "Overview"], ["/stream", "Live activity"]]],
+  ["Recovery", [["/cases", "Cases"], ["/incidents", "Incidents"]]],
+  ["Evidence", [["/attribution", "Attribution"], ["/ablation", "Model"], ["/metrics", "Breakdown"]]],
+  ["Rules", [["/policy", "Policy"]]],
+];
 
-export function page(title: string, active: string, body: string): string {
+export interface Chrome {
+  /** Shown under the wordmark: which run is on screen. */
+  footer?: string;
+}
+
+export function page(title: string, active: string, body: string, chrome: Chrome = {}): string {
   const nav = NAV.map(
-    ([href, label]) => `<a href="${href}"${active === label ? ' class="on"' : ""}>${label}</a>`,
+    ([group, items]) => `<div class="navgroup"><h3>${esc(group)}</h3><nav>${items
+      .map(([href, label]) =>
+        `<a href="${href}"${href === active ? ' class="on"' : ""}>${esc(label)}</a>`)
+      .join("")}</nav></div>`,
   ).join("");
+
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)} — Recovery Agent</title><style>${CSS}</style></head>
-<body><header class="masthead">
-<div class="wordmark">Recovery Agent<span>revenue at risk, recovered and measured</span></div>
-<nav>${nav}</nav></header>
-<main>${body}</main></body></html>`;
+<body><div class="shell">
+<aside>
+  <div class="brand"><b>Recovery Agent</b><span>revenue at risk, recovered and measured</span></div>
+  ${nav}
+  ${chrome.footer ? `<div class="sidefoot">${chrome.footer}</div>` : ""}
+</aside>
+<main>${body}</main>
+</div></body></html>`;
 }
 
-/** Page opener: one line of what this is, one of what it is for. */
-export const head = (title: string, dek: string): string =>
-  `<h1>${esc(title)}</h1><p class="dek">${dek}</p>`;
+export const pageHead = (title: string, dek: string): string =>
+  `<div class="pagehead"><h1>${esc(title)}</h1><p>${dek}</p></div>`;
 
 export const section = (label: string, inner: string): string =>
-  `<section><h2>${esc(label)}</h2>${inner}</section>`;
+  `<section>${label ? `<h2>${esc(label)}</h2>` : ""}${inner}</section>`;
 
-/**
- * The headline figure. Size is reserved for the number that matters; anything
- * shown beside it for comparison is set quiet so the eye is not asked to
- * choose between them.
- */
-export const figure = (
-  amount: string,
-  caption: string,
-  under = "",
-  quiet = false,
-): string =>
-  `<div class="figure"><span class="amount${quiet ? " quiet" : ""}">${esc(amount)}</span>
-   <div class="caption">${esc(caption)}</div>
-   ${under ? `<div class="under">${under}</div>` : ""}</div>`;
+/** A card. `meta` sits right-aligned in the header for context, not decoration. */
+export const card = (title: string, body: string, meta = "", flush = false): string =>
+  `<div class="card">
+     ${title ? `<div class="card-hd"><h3>${esc(title)}</h3>${meta ? `<span class="meta">${meta}</span>` : ""}</div>` : ""}
+     <div class="card-bd${flush ? " flush" : ""}">${body}</div>
+   </div>`;
 
-export const lede = (figures: string[]): string =>
-  `<div class="lede">${figures.join("")}</div>`;
+export type StatTone = "hero" | "normal" | "quiet";
 
-export const measure = (v: string, k: string, s = "", quiet = false): string =>
-  `<div class="measure"><div class="v${quiet ? " quiet" : ""}">${esc(v)}</div>
-   <div class="k">${esc(k)}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`;
+export const stat = (label: string, value: string, sub = "", tone: StatTone = "normal"): string =>
+  `<div class="stat${tone === "hero" ? " hero" : tone === "quiet" ? " quiet" : ""}">
+     <div class="k">${esc(label)}</div>
+     <div class="v">${esc(value)}</div>
+     ${sub ? `<div class="s">${sub}</div>` : ""}
+   </div>`;
 
-export const measures = (items: string[]): string =>
-  `<div class="measures">${items.join("")}</div>`;
+export const grid = (cols: 2 | 3 | 4, items: string[]): string =>
+  `<div class="grid c${cols}">${items.join("")}</div>`;
 
-/** SIM or LIVE. Screen 2 exists to prove the honesty claim, so every executed
- *  row has to say which world it happened in. */
+/** SIM or LIVE. The case trail exists to prove the honesty claim, so every
+ *  executed row has to say which world it happened in. */
 export const surfaceTag = (surface: string): string =>
   surface === "live"
-    ? `<span class="mark live">LIVE</span>`
-    : `<span class="mark">SIM</span>`;
+    ? `<span class="chip solid">LIVE</span>`
+    : `<span class="chip">SIM</span>`;
 
 export const bar = (fraction: number, quiet = false): string =>
   `<div class="bar${quiet ? " quiet" : ""}"><span style="width:${Math.max(0, Math.min(1, fraction)) * 100}%"></span></div>`;
@@ -110,5 +119,5 @@ export function table(
   return `<div class="scroll"><table><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table></div>`;
 }
 
-export const empty = (what: string): string => `<p class="empty">${what}</p>`;
 export const hint = (text: string): string => `<p class="hint">${text}</p>`;
+export const empty = (what: string): string => `<p class="empty">${what}</p>`;

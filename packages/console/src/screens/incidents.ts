@@ -1,5 +1,5 @@
 import { incidentList, releaseSteps } from "../queries.js";
-import { bar, esc, head, hint, measure, measures, page, pct, section, table } from "../render.js";
+import { bar, card, esc, grid, hint, page, pageHead, pct, section, stat, table } from "../render.js";
 
 const RAMP = [0.05, 0.15, 0.4, 1.0];
 
@@ -8,12 +8,13 @@ export async function incidentsScreen(): Promise<string> {
   const incidents = await incidentList();
   if (incidents.length === 0) {
     return page(
-      "incidents",
-      "incidents",
-      `${head("No incident opened", "Nothing in this run crossed the detection threshold.")}
-       <p class="note">That is a result, not an absence. A fault confined to a few dozen cases is
-       genuinely indistinguishable from noise, and the detector is built to stay quiet rather than
-       open something it cannot justify.</p>`,
+      "Incidents",
+      "/incidents",
+      `${pageHead("No incident opened", "Nothing in this run crossed the detection threshold.")}
+       ${card("Why that is a result", `<p class="note">A fault confined to a few dozen cases is
+         genuinely indistinguishable from noise. The detector is built to stay quiet rather than
+         open something it cannot justify — a volume floor, a dwell requirement and a correction
+         for testing hundreds of segments at once all have to be cleared first.</p>`)}`,
     );
   }
 
@@ -28,7 +29,7 @@ export async function incidentsScreen(): Promise<string> {
             ["expected", "observed", "z", "p", "attempts"],
             [[
               pct(i.baseline_rate),
-              `<span class="key">${pct(i.observed_rate)}</span>`,
+              `<strong>${pct(i.observed_rate)}</strong>`,
               i.z_score.toFixed(2),
               (i.p_value ?? 1) < 0.0001 ? "&lt;0.0001" : (i.p_value ?? 1).toFixed(4),
               String(i.sample_n),
@@ -36,15 +37,17 @@ export async function incidentsScreen(): Promise<string> {
             [0, 1, 2, 3, 4],
           )
         : `<p class="note">Opened from an external downtime signal rather than the internal
-           detector, so there is no test statistic to show. Both paths converge on one record.</p>`;
+           detector, so there is no test statistic. Both paths converge on one record.</p>`;
 
     const stepRows = steps.map((s) => {
       const p = s.payload as Record<string, unknown>;
       const action = String(p["action"] ?? "");
       return [
-        action === "reparked" ? `<span class="key">pulled back</span>`
-          : action === "completed" ? `<span class="key">complete</span>`
-          : "released",
+        action === "reparked"
+          ? `<span class="chip solid">pulled back</span>`
+          : action === "completed"
+            ? `<span class="chip">complete</span>`
+            : "released",
         String(p["stage"] ?? ""),
         String(p["releasedNow"] ?? ""),
         String(p["stillParked"] ?? ""),
@@ -53,24 +56,26 @@ export async function incidentsScreen(): Promise<string> {
     });
 
     blocks.push(`
-      ${head(esc(i.segment_label), `${esc(i.detected_by.replace(/_/g, " "))} · ${esc(i.state)}`)}
-      ${measures([
-        measure(String(parked), "cases held", "not retrying on their own"),
-        measure(`${i.release_stage} of ${RAMP.length}`, "release stage"),
-        measure(pct(i.observed_rate), "approval rate", `against ${pct(i.baseline_rate)} expected`),
+      ${pageHead(esc(i.segment_label), `${esc(i.detected_by.replace(/_/g, " "))} · ${esc(i.state)}`)}
+      ${grid(3, [
+        stat("Cases held", String(parked), "not retrying on their own", "hero"),
+        stat("Release stage", `${i.release_stage} of ${RAMP.length}`, RAMP.map((f) => `${(f * 100).toFixed(0)}%`).join(" · ")),
+        stat("Approval rate", pct(i.observed_rate), `against ${pct(i.baseline_rate)} expected`),
       ])}
-      ${section("what the detector saw", detection)}
-      ${section("letting them back out", `
-        ${bar(i.release_stage / RAMP.length)}
-        <p class="note" style="margin-top:14px">Released in widening slices —
-        ${RAMP.map((f) => `${(f * 100).toFixed(0)}%`).join(", ")} — each gated on the live rate
-        holding. If it drops, the slice is pulled back rather than pressing on.</p>
-        ${stepRows.length ? table(["step", "stage", "released", "still held", "reason"], stepRows, [1, 2, 3]) : ""}`)}
-      ${i.rca ? section("what caused it", `<pre>${esc(JSON.stringify(i.rca, null, 2))}</pre>`) : ""}
+      ${section("", `<div class="grid c2">
+        ${card("What the detector saw", detection, "", true)}
+        ${card("Letting them back out",
+          `${bar(i.release_stage / RAMP.length)}
+           <p class="note" style="margin-top:12px">Released in widening slices, each gated on the
+           live rate holding. If it drops, the slice is pulled back rather than pressing on.</p>`)}
+      </div>`)}
+      ${stepRows.length ? section("", card("Release steps",
+        table(["step", "stage", "released", "still held", "reason"], stepRows, [1, 2, 3]), "", true)) : ""}
+      ${i.rca ? section("", card("What caused it", `<pre>${esc(JSON.stringify(i.rca, null, 2))}</pre>`)) : ""}
       ${hint(`The incident owns these cases, not the other way round. A held case cannot resume
         itself, which is what stops a thousand of them returning at once to a gateway that has
         only just recovered.`)}`);
   }
 
-  return page("incidents", "incidents", blocks.join(""));
+  return page("Incidents", "/incidents", blocks.join(""));
 }

@@ -1,81 +1,137 @@
-import { bar, figure, head, hint, lede, measure, measures, page, pct, rupees, section, table } from "../render.js";
+import { bar, card, grid, hint, page, pageHead, pct, rupees, section, stat, table } from "../render.js";
 import { latestBatch, policyBlocks, terminalStates, tierCounts } from "../queries.js";
+import { getPool } from "@rra/db";
 
-/** Overview — the money screen. */
+/**
+ * Overview — the screen that answers "did it work?" without being read.
+ *
+ * One figure leads: the money the agent caused. Everything under it exists to
+ * make that figure believable — the arm it was measured against, who decided
+ * each case, and what the policy refused. Total collected sits beside the
+ * headline in a quieter weight, because it is the number people reach for by
+ * mistake and the whole point of a holdout is that the two differ.
+ */
 export async function batchScreen(): Promise<string> {
   const b = await latestBatch();
   if (!b) {
     return page(
-      "overview",
-      "overview",
-      head("No run yet", "Run <code>npm run batch scenarios/demo.yaml</code>, then reload."),
+      "Overview",
+      "/",
+      pageHead("No run yet", "Run <code>npm run batch scenarios/demo.yaml</code>, then reload."),
     );
   }
 
   const gross = Number(b.gross_recovered_paise);
   const incr = Number(b.incremental_paise);
-  const [lo, hi] = [Number(b.incremental_ci_low), Number(b.incremental_ci_high)];
+  const lo = Number(b.incremental_ci_low);
+  const hi = Number(b.incremental_ci_high);
+  const total = b.treated_n + b.holdout_n;
 
-  // Incremental leads. Gross is set quiet beside it because the two are
-  // routinely confused, and the whole point of the holdout is that they differ.
-  const top = lede([
-    figure(rupees(incr), "recovered by the agent", `95% interval ${rupees(lo)} – ${rupees(hi)}`),
-    figure(rupees(gross), "collected in total", "includes money that would have arrived anyway", true),
+  const headline = grid(4, [
+    stat("Recovered by the agent", rupees(incr), `95% interval ${rupees(lo)} – ${rupees(hi)}`, "hero"),
+    stat("Collected in total", rupees(gross), "includes money that would have arrived anyway", "quiet"),
+    stat("Lift over holdout", pct(b.lift), `interval ${pct(b.lift_ci_low)} – ${pct(b.lift_ci_high)}`),
+    stat("Obligations worked", String(total), `${b.holdout_n} held back, never contacted`),
   ]);
 
-  const arms = table(
-    ["arm", "cases", "recovered", "rate", ""],
-    [
-      ["treated", String(b.treated_n), String(b.treated_recovered), pct(b.treated_rate), bar(b.treated_rate)],
-      ["holdout", String(b.holdout_n), String(b.holdout_recovered), pct(b.holdout_rate), bar(b.holdout_rate, true)],
-    ],
-    [1, 2, 3],
+  const arms = card(
+    "Treated against held back",
+    table(
+      ["arm", "cases", "recovered", "rate", ""],
+      [
+        ["Treated", String(b.treated_n), String(b.treated_recovered), pct(b.treated_rate), bar(b.treated_rate)],
+        ["Held back", String(b.holdout_n), String(b.holdout_recovered), pct(b.holdout_rate), bar(b.holdout_rate, true)],
+      ],
+      [1, 2, 3],
+    ),
+    `${b.excluded_treated + b.excluded_holdout} excluded as natural recovery`,
+    true,
   );
 
   const tiers = await tierCounts();
   const tierTotal = tiers.reduce((s, x) => s + x.n, 0) || 1;
-  const tierRows = tiers.map((t) => [
-    `<span class="key">Tier ${t.tier}</span>`,
-    t.tier === 0 ? "decline taxonomy and playbook" : t.tier === 1 ? "specialists deliberated" : "escalated to a person",
-    String(t.n),
-    bar(t.n / tierTotal, t.tier !== 0),
-  ]);
+  const decided = card(
+    "Who decided",
+    table(
+      ["", "how", "cases", ""],
+      tiers.map((t) => [
+        `<span class="chip">Tier ${t.tier}</span>`,
+        t.tier === 0
+          ? "Decline taxonomy and playbook"
+          : t.tier === 1
+            ? "Specialists deliberated"
+            : "Escalated to a person",
+        String(t.n),
+        bar(t.n / tierTotal, t.tier !== 0),
+      ]),
+      [2],
+    ),
+    "",
+    true,
+  );
 
   const terminals = await terminalStates();
   const totalCases = terminals.reduce((s, t) => s + t.n, 0) || 1;
-  const termRows = terminals.map((t) => [
-    `<span class="state state-${t.state}">${t.state.replace(/_/g, " ")}</span>`,
-    String(t.n),
-    rupees(Number(t.value)),
-    bar(t.n / totalCases, t.state !== "RECOVERED"),
-  ]);
+  const outcomes = card(
+    "How cases ended",
+    table(
+      ["outcome", "cases", "value", ""],
+      terminals.map((t) => [
+        `<span class="state state-${t.state}">${t.state.replace(/_/g, " ").toLowerCase()}</span>`,
+        String(t.n),
+        rupees(Number(t.value)),
+        bar(t.n / totalCases, t.state !== "RECOVERED"),
+      ]),
+      [1, 2],
+    ),
+    "",
+    true,
+  );
 
+  // Compliance is not a footnote here: refusing an action is the product
+  // working, and the count is the only proof the rules are load-bearing.
   const blocks = (await policyBlocks()).filter((p) => p.outcome === "block");
-  const blockRows = blocks.map((p) => [
-    `<span class="mono">${p.rule_id}</span>`,
-    p.reason,
-    String(p.n),
+  const refused = blocks.length
+    ? card(
+        "Actions the policy refused",
+        table(
+          ["rule", "because", "count"],
+          blocks.map((p) => [`<span class="chip">${p.rule_id}</span>`, p.reason, String(p.n)]),
+          [2],
+        ),
+        `${blocks.reduce((s, p) => s + p.n, 0)} refusals`,
+        true,
+      )
+    : "";
+
+  const { rows: inc } = await getPool().query<{ n: string; parked: string }>(
+    `SELECT count(*) AS n,
+            coalesce((SELECT count(*) FROM incident_members), 0) AS parked
+       FROM incidents`,
+  );
+  const incidents = Number(inc[0]?.n ?? 0);
+
+  const activity = grid(3, [
+    stat("Incidents", String(incidents), incidents ? `${inc[0]?.parked} cases held while it ran` : "nothing crossed the threshold"),
+    stat("Provider calls", String(b.provider_calls), b.provider_calls ? "on the cases Tier 0 could not answer" : "no model was configured"),
+    stat("Measurement window", `${b.window_days} days`, "per obligation, from the moment it was opened"),
   ]);
 
   return page(
-    "overview",
-    "overview",
-    `${head(
+    "Overview",
+    "/",
+    `${pageHead(
       "Recovery run",
-      `${b.treated_n + b.holdout_n} obligations at risk, worked over a ${b.window_days}-day window.`,
+      `${total} obligations at risk, worked to a conclusion under a virtual clock.`,
     )}
-     ${top}
-     ${measures([
-       measure(pct(b.lift), "lift over holdout", `95% interval ${pct(b.lift_ci_low)} – ${pct(b.lift_ci_high)}`),
-       measure(String(b.holdout_n), "held back", "never contacted, so the comparison is real"),
-       measure(String(b.excluded_treated + b.excluded_holdout), "excluded as natural", "dropped from both arms alike"),
-     ])}
+     ${headline}
      ${hint(
-       `The holdout is the argument. Without a set of cases the agent never touched, any recovery
-        number is just the money that happened to arrive.`,
+       `The held-back arm is the argument. Without a set of cases the agent never touched,
+        a recovery figure is only the money that happened to arrive.`,
      )}
-     ${section("who decided", table(["", "how", "cases", ""], tierRows, [2]))}
-     ${section("how cases ended", table(["outcome", "cases", "value", ""], termRows, [1, 2]))}
-     ${blockRows.length ? section("actions the policy refused", table(["rule", "because", "count"], blockRows, [2])) : ""}`,
+     ${section("", `<div class="grid c2">${arms}${decided}</div>`)}
+     ${section("", `<div class="grid c2">${outcomes}${refused}</div>`)}
+     ${section("Run at a glance", activity)}`,
+    { footer: `Batch <span class="mono">${b.batch_id}</span><br>arm ${b.arm}` },
   );
 }

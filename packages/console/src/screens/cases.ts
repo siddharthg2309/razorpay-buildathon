@@ -1,52 +1,53 @@
 import { caseList, caseTrail } from "../queries.js";
-import { esc, head, hint, measure, measures, page, rel, rupees, section, surfaceTag, table } from "../render.js";
+import { card, esc, grid, hint, page, pageHead, rel, rupees, section, stat, surfaceTag, table } from "../render.js";
 
 const FILTERS = ["", "RECOVERED", "UNRECOVERABLE", "OPTED_OUT", "DISPUTED", "SUPPRESSED_BY_INCIDENT"] as const;
 
 export async function casesScreen(filter?: string): Promise<string> {
   const rows = await caseList(150, filter);
 
-  const nav = FILTERS.map((f) => {
+  const filters = `<div class="filters">${FILTERS.map((f) => {
     const on = filter === f || (!filter && !f);
-    return `<a href="/cases${f ? `?state=${f}` : ""}" class="mark${on ? " on" : ""}">${f ? f.replace(/_/g, " ").toLowerCase() : "all"}</a>`;
-  }).join(" ");
+    const label = f ? f.replace(/_/g, " ").toLowerCase() : "all";
+    return `<a href="/cases${f ? `?state=${f}` : ""}"${on ? ' class="on"' : ""}>${label}</a>`;
+  }).join("")}</div>`;
 
   const body = table(
     ["case", "domain", "tier", "arm", "at risk", "outcome"],
     rows.map((c) => [
       `<a href="/case/${esc(c.id)}" class="mono">${esc(c.id)}</a>`,
       esc(c.domain.replace(/_/g, " ")),
-      `<span class="mono">T${c.tier}</span>`,
-      c.holdout ? `<span class="mark">held back</span>` : `<span class="mono">treated</span>`,
+      `<span class="chip">T${c.tier}</span>`,
+      c.holdout ? `<span class="chip">held back</span>` : `<span style="color:var(--ink-3)">treated</span>`,
       rupees(Number(c.amount)),
-      `<span class="state state-${c.state}">${esc(c.state.replace(/_/g, " "))}</span>`,
+      `<span class="state state-${c.state}">${esc(c.state.replace(/_/g, " ").toLowerCase())}</span>`,
     ]),
     [4],
   );
 
   return page(
-    "cases",
-    "cases",
-    `${head("Cases", "Every obligation the agent opened. Open one to read what it did and why.")}
-     <div style="margin-bottom:26px">${nav}</div>
-     ${body}`,
+    "Cases",
+    "/cases",
+    `${pageHead("Cases", "Every obligation the agent opened. Open one to read exactly what it did, and why.")}
+     ${filters}
+     ${card("", body, `${rows.length} shown`, true)}`,
   );
 }
 
-/** Steps that carry the audit weight, emphasised in the trail. */
+/** Steps that carry the audit weight, picked out in the trail. */
 const KEY_STEPS = new Set(["POLICY", "TOKEN", "EXECUTE", "SETTLEMENT", "TERMINAL_REACHED"]);
 
 /**
  * One case, end to end.
  *
- * This is the screen the audit-trail requirement rests on, so it is a reading
- * surface rather than a dashboard: a single column, in order, nothing hidden
- * and nothing summarised.
+ * The audit-trail requirement rests on this screen, so it is a reading surface:
+ * one column, in order, nothing hidden and nothing summarised. The rows that
+ * carry weight are shaded so a reader can find them without being told.
  */
 export async function caseScreen(caseId: string): Promise<string> {
   const { header, origin, entries } = await caseTrail(caseId);
   if (!header) {
-    return page("case", "cases", head("Not found", `No case <code>${esc(caseId)}</code>.`));
+    return page("Case not found", "/cases", pageHead("Not found", `No case <code>${esc(caseId)}</code>.`));
   }
 
   const h = header as Record<string, unknown>;
@@ -63,29 +64,29 @@ export async function caseScreen(caseId: string): Promise<string> {
     .join("");
 
   return page(
-    `case ${caseId}`,
-    "cases",
-    `${head(
+    "Cases",
+    "/cases",
+    `${pageHead(
       esc(caseId),
       `${esc(String(h["domain"]).replace(/_/g, " "))} · obligation <code>${esc(h["obligation_id"])}</code>`,
     )}
-     ${measures([
-       measure(rupees(Number(h["amount_paise"])), "at risk"),
-       measure(
-         state.replace(/_/g, " "),
-         "outcome",
+     ${grid(4, [
+       stat("At risk", rupees(Number(h["amount_paise"]))),
+       stat("Outcome", state.replace(/_/g, " ").toLowerCase(),
          h["terminal_reason"] ? esc(h["terminal_reason"]) : "",
-         state !== "RECOVERED",
-       ),
-       measure(`Tier ${h["tier"]}`, "decided by", h["tier"] === 0 ? "taxonomy, no model" : "specialists"),
-       measure(h["holdout_flag"] ? "held back" : "treated", "arm",
-         h["holdout_flag"] ? "never contacted" : "agent acted", Boolean(h["holdout_flag"])),
+         state === "RECOVERED" ? "hero" : "quiet"),
+       stat("Decided by", `Tier ${h["tier"]}`, h["tier"] === 0 ? "taxonomy, no model" : "specialists"),
+       stat("Arm", h["holdout_flag"] ? "held back" : "treated",
+         h["holdout_flag"] ? "never contacted" : "agent acted",
+         h["holdout_flag"] ? "quiet" : "normal"),
      ])}
-     ${section("what happened, in order", `<div class="scroll"><table class="trail"><tbody>${trail}</tbody></table></div>`)}
+     ${section("", card("What happened, in order",
+       `<div class="scroll"><table class="trail"><tbody>${trail}</tbody></table></div>`,
+       `${entries.length} entries`, true))}
      ${hint(
-       `<span class="mark live">LIVE</span> marks an action executed against Razorpay Test Mode.
-        <span class="mark">SIM</span> marks one executed against the simulator. Nothing in this
-        trail is inferred after the fact — each line was written when it happened.`,
+       `<span class="chip solid">LIVE</span> marks an action executed against Razorpay Test Mode;
+        <span class="chip">SIM</span> marks one executed against the simulator. Nothing here is
+        reconstructed after the fact — each line was written as it happened.`,
      )}`,
   );
 }
