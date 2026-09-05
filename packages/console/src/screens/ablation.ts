@@ -38,7 +38,7 @@ export async function ablationScreen(): Promise<string> {
 
   if (decisions.length === 0 && !full) {
     return page("Model", "/ablation",
-      `${pageHead("The model has not run", "No provider was configured for this batch.")}
+      `${pageHead("The model has not run")}
        <p class="note">Tier 0 resolved every case from the decline taxonomy. Set a key in
        <code>.env</code> and run the batch again.</p>`);
   }
@@ -61,14 +61,19 @@ export async function ablationScreen(): Promise<string> {
     const readable = Math.abs(delta) > band;
 
     verdict = `
-      ${grid(2, [
-        stat("Difference it made", rupees(delta), `over ${differing} cases`),
-        stat("What the batch can resolve", `± ${rupees(band)}`, readable ? "the difference is larger" : "the difference is smaller", "quiet"),
+      ${grid(3, [
+        stat("Difference it made", rupees(delta), "hero"),
+        stat("What the batch can resolve", `± ${rupees(band)}`, "quiet"),
+        stat("Cases it decided", String(differing)),
       ])}
-      ${grid(4, [
-        stat("With the model", rupees(Number(full.incremental_paise)), `lift ${pct(full.lift)} · ${full.provider_calls} calls`),
-        stat("Without it", rupees(Number(control.incremental_paise)), `lift ${pct(control.lift)} · playbooks only`, "quiet"),
-      ])}
+      ${section("With the model, and without it", card("", table(
+        ["arm", "recovered by the agent", "lift", "provider calls"],
+        [
+          ["With the model", rupees(Number(full.incremental_paise)), pct(full.lift), String(full.provider_calls)],
+          ["Playbooks only", rupees(Number(control.incremental_paise)), pct(control.lift), "0"],
+        ],
+        [1, 2, 3],
+      ), "", true))}
       ${section(readable ? "Large enough to read" : "Too small to read",
         readable
           ? `<p class="note">Larger than the noise a batch this size carries. It compares the model
@@ -90,14 +95,14 @@ export async function ablationScreen(): Promise<string> {
   return page(
     "Model",
     "/ablation",
-    `${pageHead("What the model decided", "The cases the decline taxonomy could not answer.")}
+    `${pageHead("What the model decided")}
      ${verdict}
-     ${section("What it concluded",
+     ${section("What it concluded", card("",
        table(["cause", "cases", ""],
          [...spread.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) =>
            [esc(c.replace(/_/g, " ")), String(n), bar(n / Math.max(1, decisions.length))]),
-         [1]) +
-       `<p class="note" style="margin-top:16px">${recovered} of ${decisions.length} recovered.</p>`)}
-     ${section("Case by case", table(["case", "at risk", "rail", "concluded", "confidence", "citing", "outcome"], rows, [1, 4]))}`,
+         [1]),
+       `${recovered} of ${decisions.length} recovered`, true))}
+     ${section("Case by case", card("", table(["case", "at risk", "rail", "concluded", "confidence", "citing", "outcome"], rows, [1, 4]), "", true))}`,
   );
 }

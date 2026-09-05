@@ -83,11 +83,13 @@ export async function metricsScreen(): Promise<string> {
   return page(
     "Breakdown",
     "/metrics",
-    `${pageHead("Beyond the headline", "Where the recovery came from, and what it cost in contacts.")}
-     ${grid(4, [
-       stat("Typical time to recover", hours(ttr[0]?.p50 ?? null), `slowest tenth ${hours(ttr[0]?.p90 ?? null)}`),
-       stat("Renewals collected", rupees(Number(mrr[0]?.collected ?? 0)), `${mrr[0]?.n ?? 0} kept · not in the headline`),
-       stat("Customers contacted", String(contacts), `${contact[0]?.customers ?? 0} distinct customers`),
+    `${pageHead("Beyond the headline")}
+     ${grid(3, [
+       stat("Typical time to recover", hours(ttr[0]?.p50 ?? null)),
+       stat("Slowest tenth", hours(ttr[0]?.p90 ?? null)),
+       stat("Subscriptions kept", String(mrr[0]?.n ?? 0)),
+       stat("Renewals collected", rupees(Number(mrr[0]?.collected ?? 0))),
+       stat("Customers contacted", String(contacts)),
        stat("Collected per contact", contacts ? rupees(recoveredPaise / contacts) : "—"),
      ])}
      ${section("By cause", render(await breakdown("cause")))}

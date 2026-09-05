@@ -101,11 +101,17 @@ export const card = (title: string, body: string, meta = "", flush = false): str
 
 export type StatTone = "hero" | "normal" | "quiet";
 
-export const stat = (label: string, value: string, sub = "", tone: StatTone = "normal"): string =>
+/**
+ * A label and a figure. There is deliberately nowhere to put a caption.
+ *
+ * The sub-line these boxes used to carry drifted into commentary — half of
+ * them restated the label. Where a second number genuinely mattered it now
+ * gets a box of its own, which is also how it becomes comparable.
+ */
+export const stat = (label: string, value: string, tone: StatTone = "normal"): string =>
   `<div class="stat${tone === "hero" ? " hero" : tone === "quiet" ? " quiet" : ""}">
      <div class="k">${esc(label)}</div>
      <div class="v">${esc(value)}</div>
-     ${sub ? `<div class="s">${sub}</div>` : ""}
    </div>`;
 
 export const grid = (cols: 2 | 3 | 4, items: string[]): string =>

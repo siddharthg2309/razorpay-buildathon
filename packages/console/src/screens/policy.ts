@@ -34,10 +34,10 @@ export async function policyScreen(merchant = "acme-subscriptions"): Promise<str
     "/policy",
     `${pageHead("What the agent is allowed to do", `Version ${esc(policy.version)} · ${esc(policy.merchant)}`)}
      ${grid(4, [
-       stat("Actions refused", String(sum("block")), "", "hero"),
-       stat("Actions permitted", String(sum("allow")), "", "quiet"),
-       stat("Sent to a person", String(sum("require_approval")), "", "quiet"),
-       stat("Quiet hours", `${policy.quietHours.start}–${policy.quietHours.end}`, esc(policy.quietHours.timezone)),
+       stat("Actions refused", String(sum("block")), "hero"),
+       stat("Actions permitted", String(sum("allow")), "quiet"),
+       stat("Sent to a person", String(sum("require_approval")), "quiet"),
+       stat(`Quiet hours · ${policy.quietHours.timezone}`, `${policy.quietHours.start}–${policy.quietHours.end}`),
      ])}
      ${section("Decisions",
        card("", table(["rule", "outcome", "reason", "count"], rows, [3]), "", true))}

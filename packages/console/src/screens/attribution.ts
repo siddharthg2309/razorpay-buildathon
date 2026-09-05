@@ -23,11 +23,12 @@ export async function attributionScreen(): Promise<string> {
   return page(
     "Attribution",
     "/attribution",
-    `${pageHead("How the number is arrived at", "Measured against cases the agent never touched.")}
-     ${grid(3, [
-       stat("Recovered by the agent", rupees(incr), `interval ${rupees(Number(b.incremental_ci_low))} – ${rupees(Number(b.incremental_ci_high))}`, "hero"),
-       stat("Collected in total", rupees(Number(b.gross_recovered_paise)), "before the counterfactual is removed", "quiet"),
-       stat("Held back", String(b.holdout_n), "stratified, immutable once assigned"),
+    `${pageHead("How the number is arrived at")}
+     ${grid(4, [
+       stat("Recovered by the agent", rupees(incr), "hero"),
+       stat("95% interval", `${rupees(Number(b.incremental_ci_low))} – ${rupees(Number(b.incremental_ci_high))}`),
+       stat("Collected in total", rupees(Number(b.gross_recovered_paise)), "quiet"),
+       stat("Held back", String(b.holdout_n)),
      ])}
      ${section("The estimator", card("", equation))}
      ${section("The two arms", card("", table(
@@ -38,13 +39,12 @@ export async function attributionScreen(): Promise<string> {
        ],
        [1, 2, 3],
      ), "", true))}
-     ${section("Reading the figure", `<div class="grid c2">
-       ${b.excluded_treated + b.excluded_holdout
-         ? card("Natural recovery", `<p class="note">Money that arrived on its own, dropped from
-           <strong>both</strong> arms: ${b.excluded_treated} treated, ${b.excluded_holdout} held back.</p>`)
-         : ""}
-       ${card("Why it is a range", `<p class="note">Chance imbalance between the arms on what nobody
-         can observe — who was going to pay regardless. Claim the interval, not the point.</p>`)}
-     </div>`)}`,
+     ${b.excluded_treated + b.excluded_holdout
+       ? section("Excluded as natural recovery", card("", table(
+           ["arm", "cases dropped"],
+           [["Treated", String(b.excluded_treated)], ["Held back", String(b.excluded_holdout)]],
+           [1],
+         ), "", true))
+       : ""}`,
   );
 }

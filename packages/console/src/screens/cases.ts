@@ -73,11 +73,9 @@ export async function caseScreen(caseId: string): Promise<string> {
      ${grid(4, [
        stat("At risk", rupees(Number(h["amount_paise"]))),
        stat("Outcome", state.replace(/_/g, " ").toLowerCase(),
-         h["terminal_reason"] ? esc(h["terminal_reason"]) : "",
          state === "RECOVERED" ? "hero" : "quiet"),
-       stat("Decided by", `Tier ${h["tier"]}`, h["tier"] === 0 ? "taxonomy" : "specialists"),
+       stat("Decided by", `Tier ${h["tier"]}`),
        stat("Arm", h["holdout_flag"] ? "held back" : "treated",
-         "",
          h["holdout_flag"] ? "quiet" : "normal"),
      ])}
      ${section("", card("What happened, in order",

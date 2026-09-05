@@ -28,10 +28,10 @@ export async function batchScreen(): Promise<string> {
   const total = b.treated_n + b.holdout_n;
 
   const headline = grid(4, [
-    stat("Recovered by the agent", rupees(incr), `95% interval ${rupees(lo)} – ${rupees(hi)}`, "hero"),
-    stat("Collected in total", rupees(gross), "before the counterfactual is removed", "quiet"),
-    stat("Lift over holdout", pct(b.lift), `interval ${pct(b.lift_ci_low)} – ${pct(b.lift_ci_high)}`),
-    stat("Obligations worked", String(total), `${b.holdout_n} held back`),
+    stat("Recovered by the agent", rupees(incr), "hero"),
+    stat("95% interval", `${rupees(lo)} – ${rupees(hi)}`),
+    stat("Collected in total", rupees(gross), "quiet"),
+    stat("Lift over holdout", pct(b.lift)),
   ]);
 
   const arms = card(
@@ -111,19 +111,17 @@ export async function batchScreen(): Promise<string> {
   );
   const incidents = Number(inc[0]?.n ?? 0);
 
-  const activity = grid(3, [
-    stat("Incidents", String(incidents), incidents ? `${inc[0]?.parked} cases held` : "none opened"),
-    stat("Provider calls", String(b.provider_calls), b.provider_calls ? "cases Tier 0 could not answer" : "no model configured"),
-    stat("Measurement window", `${b.window_days} days`, "per obligation"),
+  const activity = grid(4, [
+    stat("Obligations worked", String(total)),
+    stat("Held back", String(b.holdout_n)),
+    stat("Incidents", String(incidents)),
+    stat("Provider calls", String(b.provider_calls)),
   ]);
 
   return page(
     "Overview",
     "/",
-    `${pageHead(
-      "Recovery run",
-      `${total} obligations at risk, worked to a conclusion.`,
-    )}
+    `${pageHead("Recovery run")}
      ${headline}
      ${section("The measurement", `<div class="grid c2">${arms}${decided}</div>`)}
      ${section("Outcomes", `<div class="grid c2">${outcomes}${refused}</div>`)}

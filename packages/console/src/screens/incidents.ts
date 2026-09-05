@@ -10,7 +10,7 @@ export async function incidentsScreen(): Promise<string> {
     return page(
       "Incidents",
       "/incidents",
-      `${pageHead("No incident opened", "Nothing in this run crossed the detection threshold.")}
+      `${pageHead("No incident opened")}
        ${card("Why that is a result", `<p class="note">A volume floor, a dwell requirement and a
          correction for testing many segments at once all have to be cleared first. Staying quiet
          is the detector working.</p>`)}`,
@@ -58,17 +58,17 @@ export async function incidentsScreen(): Promise<string> {
       ${n === 0
         ? pageHead(esc(i.segment_label), `${esc(i.detected_by.replace(/_/g, " "))} · ${esc(i.state)}`)
         : `<h2>${esc(i.segment_label)}</h2>`}
-      ${grid(3, [
-        stat("Cases held", String(parked), "", "hero"),
-        stat("Release stage", `${i.release_stage} of ${RAMP.length}`, RAMP.map((f) => `${(f * 100).toFixed(0)}%`).join(" · ")),
-        stat("Approval rate", pct(i.observed_rate), `against ${pct(i.baseline_rate)} expected`),
+      ${grid(4, [
+        stat("Cases held", String(parked), "hero"),
+        stat("Release stage", `${i.release_stage} of ${RAMP.length}`),
+        stat("Approval rate", pct(i.observed_rate)),
+        stat("Expected rate", pct(i.baseline_rate), "quiet"),
       ])}
       ${section("Detection and release", `<div class="grid c2">
         ${card("What the detector saw", detection, "", true)}
         ${card("Letting them back out",
           `${bar(i.release_stage / RAMP.length)}
-           <p class="note" style="margin-top:12px">Widening slices, each gated on the live rate
-           holding. If it drops, the slice is pulled back.</p>`)}
+           <p class="note" style="margin-top:12px">${RAMP.map((f) => `${(f * 100).toFixed(0)}%`).join(" · ")}</p>`)}
       </div>`)}
       ${stepRows.length ? section("", card("Release steps",
         table(["step", "stage", "released", "still held", "reason"], stepRows, [1, 2, 3]), "", true)) : ""}

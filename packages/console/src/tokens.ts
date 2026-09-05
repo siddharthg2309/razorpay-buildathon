@@ -151,10 +151,9 @@ p{margin:0 0 14px;max-width:70ch}
   padding:20px 22px;transition:box-shadow .18s ease}
 .stat:hover{box-shadow:var(--drop)}
 .stat .k{font-size:12px;font-weight:600;letter-spacing:.96px;text-transform:uppercase;
-  color:var(--muted);margin-bottom:12px}
+  color:var(--muted);margin-bottom:14px}
 .stat .v{font-family:var(--serif);font-weight:300;font-size:32px;letter-spacing:-.32px;
   line-height:1.13;color:var(--ink);font-variant-numeric:tabular-nums}
-.stat .s{font-size:14px;color:var(--muted);margin-top:8px;line-height:1.45}
 .stat.hero{border-color:var(--ink)}
 .stat.hero .v{font-size:44px;letter-spacing:-.88px;line-height:1.05}
 .stat.quiet .v{color:var(--muted)}
