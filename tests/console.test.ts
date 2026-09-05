@@ -149,7 +149,7 @@ describe("console screens", () => {
     expect(streamScreen()).toContain('EventSource("/events")');
   });
 
-  it("renders every screen as valid, self-contained, monochrome HTML", async () => {
+  it("renders every screen as valid, self-contained HTML that keeps hue decorative", async () => {
     const screens = await Promise.all([
       batchScreen(), casesScreen(), caseScreen(recoveredCase), incidentsScreen(),
       policyScreen(), attributionScreen(), metricsScreen(),
@@ -157,15 +157,40 @@ describe("console screens", () => {
     for (const html of screens) {
       expect(html.startsWith("<!doctype html>")).toBe(true);
       // No external requests: the console has to work on a venue network that
-      // may not let anything out.
+      // may not let anything out. That includes the display face — the licensed
+      // one is unavailable, so the stack falls back to a system serif.
       expect(html).not.toMatch(/src="https?:|href="https?:/);
-      // Monochrome by construction — every colour a pure grey.
-      for (const hex of html.match(/#[0-9A-Fa-f]{6}/g) ?? []) {
-        const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
-        expect(Math.max(r!, g!, b!) - Math.min(r!, g!, b!)).toBeLessThanOrEqual(6);
+      expect(html).toMatch(/--serif:[^;]*serif/);
+
+      // The design system has no accent colour: the only chroma on the page is
+      // the five atmospheric orb tokens, and they are decoration. So every hex
+      // is either a warm neutral or an orb, and every orb hex appears only on
+      // its own `--orb-*` declaration — never on a bar, chip, state or border.
+      for (const line of html.split(/[;{}\n]/)) {
+        const hexes = line.match(/#[0-9A-Fa-f]{6}/g) ?? [];
+        if (hexes.length === 0) continue;
+        const declaresOrb = /--orb-[a-z]+\s*:/.test(line);
+        for (const hex of hexes) {
+          const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+          const chroma = Math.max(r!, g!, b!) - Math.min(r!, g!, b!);
+          if (declaresOrb) expect(chroma).toBeGreaterThan(16); // an orb, by design
+          else expect(chroma).toBeLessThanOrEqual(16);         // a warm neutral
+        }
       }
     }
   });
+
+  it("puts an orb on every screen and lets no value choose it", async () => {
+    // Atmosphere is keyed to the route, so nothing in the data can promote a
+    // hue into meaning. Two screens differing only in their numbers must not
+    // differ in their colour.
+    const overview = await batchScreen();
+    expect(overview).toContain('data-orb="mint"');
+    expect(overview).toContain('class="orb"');
+    expect(await casesScreen()).toContain('data-orb="peach"');
+    expect(await casesScreen("RECOVERED")).toContain('data-orb="peach"');
+  });
+
 });
 
 describe("event stream", () => {

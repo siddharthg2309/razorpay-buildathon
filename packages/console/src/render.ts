@@ -40,6 +40,24 @@ const NAV: [string, [string, string][]][] = [
   ["Rules", [["/policy", "Policy"]]],
 ];
 
+/**
+ * One atmospheric orb per screen, keyed by route.
+ *
+ * design.md's chroma is entirely decorative, so this is the only place a hue
+ * is chosen and it is chosen from where you are standing, not from what the
+ * data says. Nothing on the page reads the orb, and no value changes it.
+ */
+const ORBS: Record<string, string> = {
+  "/": "mint",
+  "/stream": "sky",
+  "/cases": "peach",
+  "/incidents": "rose",
+  "/attribution": "lavender",
+  "/ablation": "lavender",
+  "/metrics": "sky",
+  "/policy": "peach",
+};
+
 export interface Chrome {
   /** Shown under the wordmark: which run is on screen. */
   footer?: string;
@@ -53,7 +71,7 @@ export function page(title: string, active: string, body: string, chrome: Chrome
       .join("")}</nav></div>`,
   ).join("");
 
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+  return `<!doctype html><html lang="en" data-orb="${ORBS[active] ?? "mint"}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)} — Recovery Agent</title><style>${CSS}</style></head>
 <body><div class="shell">
@@ -66,8 +84,9 @@ export function page(title: string, active: string, body: string, chrome: Chrome
 </div></body></html>`;
 }
 
+/** The orb sits inside the head, behind the display line, containing nothing. */
 export const pageHead = (title: string, dek: string): string =>
-  `<div class="pagehead"><h1>${esc(title)}</h1><p>${dek}</p></div>`;
+  `<div class="pagehead"><div class="orb"></div><h1>${esc(title)}</h1><p>${dek}</p></div>`;
 
 export const section = (label: string, inner: string): string =>
   `<section>${label ? `<h2>${esc(label)}</h2>` : ""}${inner}</section>`;

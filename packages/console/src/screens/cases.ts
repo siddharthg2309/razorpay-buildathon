@@ -18,7 +18,7 @@ export async function casesScreen(filter?: string): Promise<string> {
       `<a href="/case/${esc(c.id)}" class="mono">${esc(c.id)}</a>`,
       esc(c.domain.replace(/_/g, " ")),
       `<span class="chip">T${c.tier}</span>`,
-      c.holdout ? `<span class="chip">held back</span>` : `<span style="color:var(--ink-3)">treated</span>`,
+      c.holdout ? `<span class="chip">held back</span>` : `<span style="color:var(--muted)">treated</span>`,
       rupees(Number(c.amount)),
       `<span class="state state-${c.state}">${esc(c.state.replace(/_/g, " ").toLowerCase())}</span>`,
     ]),
