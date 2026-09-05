@@ -84,10 +84,17 @@ export function page(title: string, active: string, body: string, chrome: Chrome
 </div></body></html>`;
 }
 
-/** The orb sits inside the head, behind the display line, containing nothing.
- *  The dek is optional: a heading that already says it does not want a gloss. */
-export const pageHead = (title: string, dek = ""): string =>
-  `<div class="pagehead"><div class="orb"></div><h1>${esc(title)}</h1>${dek ? `<p>${dek}</p>` : ""}</div>`;
+/**
+ * The orb sits inside the head, behind the display line, containing nothing.
+ *
+ * There is no dek. `id` switches the heading to the monospace face: a case id
+ * or a segment key is a technical identifier, and setting one in a light
+ * editorial serif reads as a typo rather than a title.
+ */
+export const pageHead = (title: string, id = false): string =>
+  `<div class="pagehead"><div class="orb"></div>
+     <h1${id ? ' class="id"' : ""}>${esc(title)}</h1>
+   </div>`;
 
 export const section = (label: string, inner: string): string =>
   `<section>${label ? `<h2>${esc(label)}</h2>` : ""}${inner}</section>`;
@@ -144,5 +151,19 @@ export function table(
     .join("");
   return `<div class="scroll"><table><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table></div>`;
 }
+
+/**
+ * A terminal block, for the surfaces that are machine output rather than prose:
+ * the estimator, the policy file, an incident's root cause, the live log.
+ *
+ * Inverting them is the design system's own move for a surface that should not
+ * read as a document, and it draws the line between what the console is saying
+ * and what it is quoting verbatim.
+ */
+export const term = (label: string, body: string): string =>
+  `<div class="term">
+     <div class="term-hd"><span class="caret"></span>${esc(label)}</div>
+     <div class="term-bd">${body}</div>
+   </div>`;
 
 export const empty = (what: string): string => `<p class="empty">${what}</p>`;

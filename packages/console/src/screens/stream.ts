@@ -1,4 +1,4 @@
-import { card, page, pageHead } from "../render.js";
+import { page, pageHead, term } from "../render.js";
 
 /** Live — the same event source the terminal view reads. */
 export function streamScreen(): string {
@@ -6,7 +6,7 @@ export function streamScreen(): string {
     "Live activity",
     "/stream",
     `${pageHead("Live activity")}
-     ${card("Events", `<div id="stream"></div>`, "newest at the bottom", true)}
+     ${term("live · newest at the bottom", `<div id="stream"></div>`)}
      <script>
        const box = document.getElementById("stream");
        const pad = (s, n) => String(s).padEnd(n).slice(0, n);

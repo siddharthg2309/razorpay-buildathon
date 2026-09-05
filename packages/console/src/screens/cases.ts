@@ -47,7 +47,7 @@ const KEY_STEPS = new Set(["POLICY", "TOKEN", "EXECUTE", "SETTLEMENT", "TERMINAL
 export async function caseScreen(caseId: string): Promise<string> {
   const { header, origin, entries } = await caseTrail(caseId);
   if (!header) {
-    return page("Case not found", "/cases", pageHead("Not found", `No case <code>${esc(caseId)}</code>.`));
+    return page("Case not found", "/cases", pageHead(`No case ${caseId}`));
   }
 
   const h = header as Record<string, unknown>;
@@ -66,12 +66,11 @@ export async function caseScreen(caseId: string): Promise<string> {
   return page(
     "Cases",
     "/cases",
-    `${pageHead(
-      esc(caseId),
-      `${esc(String(h["domain"]).replace(/_/g, " "))} · obligation <code>${esc(h["obligation_id"])}</code>`,
-    )}
-     ${grid(4, [
+    `${pageHead(caseId, true)}
+     ${grid(3, [
        stat("At risk", rupees(Number(h["amount_paise"]))),
+       stat("Domain", String(h["domain"]).replace(/_/g, " ")),
+       stat("Obligation", String(h["obligation_id"]), "quiet"),
        stat("Outcome", state.replace(/_/g, " ").toLowerCase(),
          state === "RECOVERED" ? "hero" : "quiet"),
        stat("Decided by", `Tier ${h["tier"]}`),

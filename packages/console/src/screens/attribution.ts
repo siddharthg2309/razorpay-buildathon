@@ -1,10 +1,10 @@
 import { latestBatch } from "../queries.js";
-import { bar, card, grid, page, pageHead, pct, rupees, section, stat, table } from "../render.js";
+import { bar, card, grid, page, pageHead, pct, rupees, section, stat, table, term } from "../render.js";
 
 /** Attribution — the estimator, written out with this run's numbers in it. */
 export async function attributionScreen(): Promise<string> {
   const b = await latestBatch();
-  if (!b) return page("Attribution", "/attribution", pageHead("No run yet", "Run a batch first."));
+  if (!b) return page("Attribution", "/attribution", pageHead("No run yet"));
 
   const lift = Number(b.lift);
   const incr = Number(b.incremental_paise);
@@ -30,7 +30,7 @@ export async function attributionScreen(): Promise<string> {
        stat("Collected in total", rupees(Number(b.gross_recovered_paise)), "quiet"),
        stat("Held back", String(b.holdout_n)),
      ])}
-     ${section("The estimator", card("", equation))}
+     ${section("The estimator", term("incremental recovery", equation))}
      ${section("The two arms", card("", table(
        ["arm", "cases", "recovered", "rate", ""],
        [

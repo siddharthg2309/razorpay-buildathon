@@ -17,7 +17,7 @@ export async function batchScreen(): Promise<string> {
     return page(
       "Overview",
       "/",
-      pageHead("No run yet", "Run <code>npm run batch scenarios/demo.yaml</code>, then reload."),
+      pageHead("No run yet") + `<p class="note">Run <code>npm run batch scenarios/demo.yaml</code>, then reload.</p>`,
     );
   }
 

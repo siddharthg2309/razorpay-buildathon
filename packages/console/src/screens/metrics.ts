@@ -32,9 +32,9 @@ async function breakdown(column: string): Promise<Breakdown[]> {
   }));
 }
 
-const render = (rows: Breakdown[]): string =>
+const render = (dimension: string, rows: Breakdown[]): string =>
   table(
-    ["", "cases", "recovered", "rate", "at risk", "collected", ""],
+    [dimension, "cases", "recovered", "rate", "at risk", "collected", ""],
     rows.map((r) => [
       esc(r.key.replace(/_/g, " ")),
       String(r.n), String(r.recovered), pct(r.rate),
@@ -92,14 +92,14 @@ export async function metricsScreen(): Promise<string> {
        stat("Customers contacted", String(contacts)),
        stat("Collected per contact", contacts ? rupees(recoveredPaise / contacts) : "—"),
      ])}
-     ${section("By cause", render(await breakdown("cause")))}
-     ${section("By rail", render(await breakdown("rail")))}
-     ${section("By gateway", render(await breakdown("gateway")))}
-     ${section("By issuer", render(await breakdown("issuer")))}
+     ${section("By cause", card("", render("cause", await breakdown("cause")), "", true))}
+     ${section("By rail", card("", render("rail", await breakdown("rail")), "", true))}
+     ${section("By gateway", card("", render("gateway", await breakdown("gateway")), "", true))}
+     ${section("By issuer", card("", render("issuer", await breakdown("issuer")), "", true))}
      ${section("Invoice age at recovery",
-       aging.length
+       card("", aging.length
          ? table(["age at recovery", "invoices", "value"],
              aging.map((a) => [esc(a.bucket), a.n, rupees(Number(a.value))]), [1, 2])
-         : `<p class="empty">No overdue invoices recovered in this run.</p>`)}`,
+         : `<p class="empty">No overdue invoices recovered in this run.</p>`, "", true))}`,
   );
 }

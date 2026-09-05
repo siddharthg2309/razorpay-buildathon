@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { loadPolicy } from "@rra/core";
 import { policyBlocks } from "../queries.js";
-import { card, esc, grid, page, pageHead, section, stat, table } from "../render.js";
+import { card, esc, grid, page, pageHead, section, stat, table, term } from "../render.js";
 
 /** Policy — the rules, each with a count behind it. */
 export async function policyScreen(merchant = "acme-subscriptions"): Promise<string> {
@@ -32,8 +32,10 @@ export async function policyScreen(merchant = "acme-subscriptions"): Promise<str
   return page(
     "Policy",
     "/policy",
-    `${pageHead("What the agent is allowed to do", `Version ${esc(policy.version)} · ${esc(policy.merchant)}`)}
+    `${pageHead("What the agent is allowed to do")}
      ${grid(4, [
+       stat("Policy version", esc(policy.version)),
+       stat("Merchant", esc(policy.merchant), "quiet"),
        stat("Actions refused", String(sum("block")), "hero"),
        stat("Actions permitted", String(sum("allow")), "quiet"),
        stat("Sent to a person", String(sum("require_approval")), "quiet"),
@@ -42,6 +44,6 @@ export async function policyScreen(merchant = "acme-subscriptions"): Promise<str
      ${section("Decisions",
        card("", table(["rule", "outcome", "reason", "count"], rows, [3]), "", true))}
      ${section("Contact caps", card("", caps, "", true))}
-     ${section("Policy in force", card("", `<pre>${esc(raw)}</pre>`))}`,
+     ${section("Policy in force", term(`policies/${esc(merchant)}.yaml`, `<pre>${esc(raw)}</pre>`))}`,
   );
 }

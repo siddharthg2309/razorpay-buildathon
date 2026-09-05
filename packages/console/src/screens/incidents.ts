@@ -1,5 +1,5 @@
 import { incidentList, releaseSteps } from "../queries.js";
-import { bar, card, esc, grid, page, pageHead, pct, section, stat, table } from "../render.js";
+import { bar, card, esc, grid, page, pageHead, pct, section, stat, table, term } from "../render.js";
 
 const RAMP = [0.05, 0.15, 0.4, 1.0];
 
@@ -55,14 +55,14 @@ export async function incidentsScreen(): Promise<string> {
     });
 
     blocks.push(`
-      ${n === 0
-        ? pageHead(esc(i.segment_label), `${esc(i.detected_by.replace(/_/g, " "))} · ${esc(i.state)}`)
-        : `<h2>${esc(i.segment_label)}</h2>`}
-      ${grid(4, [
+      ${n === 0 ? pageHead(i.segment_label, true) : `<h2 class="mono">${esc(i.segment_label)}</h2>`}
+      ${grid(3, [
         stat("Cases held", String(parked), "hero"),
         stat("Release stage", `${i.release_stage} of ${RAMP.length}`),
         stat("Approval rate", pct(i.observed_rate)),
         stat("Expected rate", pct(i.baseline_rate), "quiet"),
+        stat("Opened by", i.detected_by.replace(/_/g, " ")),
+        stat("State", i.state.toLowerCase(), "quiet"),
       ])}
       ${section("Detection and release", `<div class="grid c2">
         ${card("What the detector saw", detection, "", true)}
@@ -72,7 +72,7 @@ export async function incidentsScreen(): Promise<string> {
       </div>`)}
       ${stepRows.length ? section("", card("Release steps",
         table(["step", "stage", "released", "still held", "reason"], stepRows, [1, 2, 3]), "", true)) : ""}
-      ${i.rca ? section("", card("Root cause", `<pre>${esc(JSON.stringify(i.rca, null, 2))}</pre>`)) : ""}
+      ${i.rca ? section("Root cause", term("rca.json", `<pre>${esc(JSON.stringify(i.rca, null, 2))}</pre>`)) : ""}
 `);
   }
 
