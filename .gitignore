@@ -3,3 +3,6 @@ dist/
 *.tsbuildinfo
 .env
 .env.local
+
+# A working reference, not part of the deliverable.
+design.md
