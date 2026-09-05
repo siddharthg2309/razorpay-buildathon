@@ -82,7 +82,7 @@ const lines = [
    `${full.incidentsOpened} opened, ${full.casesParked} parked, released in a ramp with a circuit breaker.`],
   ["what the model did", `http://localhost:${PORT}/ablation`,
    provider ? "the cases Tier 0 could not answer, with the evidence each diagnosis cited."
-            : "empty without OPENAI_API_KEY — Tier 1 escalated instead."],
+            : "empty with no provider key set — Tier 1 escalated instead."],
   ["the estimator", `http://localhost:${PORT}/attribution`,
    "written out with this run's numbers substituted."],
   ["policy", `http://localhost:${PORT}/policy`,

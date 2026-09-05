@@ -22,7 +22,7 @@ Requires Node 22 and a local Postgres.
 ```bash
 npm install
 npm run db:create && npm run db:migrate
-npm run check                          # typecheck, lints, 242 tests
+npm run check                          # typecheck, lints, 279 tests
 npm run batch scenarios/demo.yaml      # 2000 cases under a virtual clock
 npm run console                        # http://localhost:4000
 ```
@@ -33,7 +33,7 @@ No credentials are needed for any of the above.
 |---|---|
 | `npm run batch scenarios/demo.yaml` | Runs the cohort to terminal states, prints the attribution report |
 | `npm run batch scenarios/demo.yaml -- --ablate` | Same seed with deliberation on and off |
-| `npm run console` | Six screens: batch, cases, incidents, policy, attribution, metrics |
+| `npm run console` | Eight screens: overview, cases, live activity, incidents, attribution, model, breakdown, policy |
 | `npm run tui` | The same event stream, in a shell |
 | `npm run verify:replay` | Re-derives every stored revision and every Tier 0 decision |
 | `npm run reset` | Returns the database to empty (~70ms) |
